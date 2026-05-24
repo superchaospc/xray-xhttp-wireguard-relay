@@ -41,6 +41,7 @@ XRAY_INSTALL_REF="${XRAY_INSTALL_REF:-main}"
 XRAY_INSTALL_SHA256="${XRAY_INSTALL_SHA256:-}"
 XRAY_REDACT="${XRAY_REDACT:-0}"
 AUTO_YES="${AUTO_YES:-0}"
+LAST_CONFIG_BACKUP=""
 
 die() {
     echo -e "${RED}✗ $*${NC}" >&2
@@ -872,13 +873,18 @@ PYEOF
 
 install_config() {
     local tmp="$1"
+    LAST_CONFIG_BACKUP=""
     mkdir -p "$(dirname "$CONFIG_FILE")"
-    xray run -test -config "$tmp" >/dev/null || die "Xray 配置校验失败"
+    if ! xray run -test -config "$tmp" >/dev/null; then
+        echo -e "${RED}✗ Xray 配置校验失败${NC}" >&2
+        return 1
+    fi
 
     if [ -f "$CONFIG_FILE" ]; then
         local backup
         backup="${CONFIG_FILE}.$(date +%Y%m%d%H%M%S).bak"
         cp -a "$CONFIG_FILE" "$backup"
+        LAST_CONFIG_BACKUP="$backup"
         find "$(dirname "$CONFIG_FILE")" -maxdepth 1 -name 'config.json.*.bak' -type f \
             | sort -r | tail -n +"$((BACKUP_KEEP + 1))" | xargs -r rm -f
         ok "旧配置已备份：$backup"
@@ -900,12 +906,58 @@ install_config() {
     ok "配置已写入 $CONFIG_FILE"
 }
 
+rollback_config() {
+    if [ -n "$LAST_CONFIG_BACKUP" ] && [ -f "$LAST_CONFIG_BACKUP" ]; then
+        warn "正在回滚 Xray 配置到：$LAST_CONFIG_BACKUP"
+        cp -a "$LAST_CONFIG_BACKUP" "$CONFIG_FILE"
+        systemctl restart xray >/dev/null 2>&1 || true
+        return 0
+    fi
+    warn "没有旧配置可回滚，正在移除新配置并停止 Xray"
+    rm -f "$CONFIG_FILE"
+    systemctl stop xray >/dev/null 2>&1 || true
+}
+
+backup_routes_file() {
+    if [ -f "$ROUTES_FILE" ]; then
+        local backup
+        backup="${ROUTES_FILE}.$(date +%Y%m%d%H%M%S).bak"
+        cp -a "$ROUTES_FILE" "$backup"
+        printf '%s\n' "$backup"
+    else
+        printf '%s\n' "__none__"
+    fi
+}
+
+restore_routes_file() {
+    local backup="$1"
+    if [ "$backup" = "__none__" ]; then
+        rm -f "$ROUTES_FILE"
+        return 0
+    fi
+    if [ -f "$backup" ]; then
+        cp -a "$backup" "$ROUTES_FILE"
+    fi
+}
+
+rollback_config_and_routes() {
+    local routes_backup="$1"
+    restore_routes_file "$routes_backup"
+    rollback_config
+}
+
 restart_xray() {
     systemctl daemon-reload
     systemctl enable xray >/dev/null
-    systemctl restart xray
+    if ! systemctl restart xray; then
+        echo -e "${RED}✗ Xray 重启失败${NC}" >&2
+        return 1
+    fi
     sleep 1
-    systemctl is-active --quiet xray || die "Xray 启动失败，请查看：journalctl -u xray -n 80 --no-pager"
+    if ! systemctl is-active --quiet xray; then
+        echo -e "${RED}✗ Xray 启动失败，请查看：journalctl -u xray -n 80 --no-pager${NC}" >&2
+        return 1
+    fi
     ok "Xray 已启动"
 }
 
@@ -999,7 +1051,8 @@ delete_relay_route() {
     prompt DELETE_RELAY_PORT "要删除的 Relay 入口端口"
     valid_port "$DELETE_RELAY_PORT" || die "端口必须是 1-65535"
 
-    local remaining
+    local routes_backup remaining
+    routes_backup=$(backup_routes_file)
     remaining=$(ROUTES_FILE="$ROUTES_FILE" DELETE_RELAY_PORT="$DELETE_RELAY_PORT" python3 - <<'PYEOF'
 import json
 import os
@@ -1024,7 +1077,10 @@ PYEOF
 
     if [ "$remaining" -eq 0 ]; then
         warn "已删除最后一条线路，正在停止 Xray。"
-        systemctl stop xray >/dev/null 2>&1 || true
+        if ! systemctl stop xray >/dev/null 2>&1; then
+            restore_routes_file "$routes_backup"
+            die "停止 Xray 失败，已恢复线路表"
+        fi
         ok "线路已删除"
         return 0
     fi
@@ -1033,9 +1089,18 @@ PYEOF
     tmp=$(mktemp /tmp/xray-vps2vps-relay.XXXXXX.json)
     # shellcheck disable=SC2064
     trap "rm -f '$tmp'" RETURN
-    create_relay_multi_config "$tmp"
-    install_config "$tmp"
-    restart_xray
+    if ! create_relay_multi_config "$tmp"; then
+        restore_routes_file "$routes_backup"
+        die "生成删除后的 Relay 配置失败，已恢复线路表"
+    fi
+    if ! install_config "$tmp"; then
+        restore_routes_file "$routes_backup"
+        die "安装删除后的 Relay 配置失败，已恢复线路表"
+    fi
+    if ! restart_xray; then
+        rollback_config_and_routes "$routes_backup"
+        die "Xray 重启失败，已回滚配置和线路表"
+    fi
     ok "线路已删除，其余 ${remaining} 条线路不受影响"
 }
 
@@ -1082,9 +1147,12 @@ install_exit() {
     # shellcheck disable=SC2064
     trap "rm -f '$tmp'" RETURN
     create_exit_config "$tmp"
-    install_config "$tmp"
+    install_config "$tmp" || die "安装 Exit 配置失败"
     open_firewall_port "$EXIT_PORT"
-    restart_xray
+    if ! restart_xray; then
+        rollback_config
+        die "Xray 重启失败，已回滚 Exit 配置"
+    fi
 
     exit_ip=$(get_public_ip)
     write_info "exit" \
@@ -1169,16 +1237,27 @@ install_relay() {
     CLIENT_PRIVATE_KEY="$PRIVATE_KEY"
     CLIENT_PUBLIC_KEY="$PUBLIC_KEY"
     CLIENT_SHORT_ID="$SHORT_ID"
+    local routes_backup
+    routes_backup=$(backup_routes_file)
     save_relay_route "$ROUTE_NAME"
 
     local tmp relay_ip
     tmp=$(mktemp /tmp/xray-vps2vps-relay.XXXXXX.json)
     # shellcheck disable=SC2064
     trap "rm -f '$tmp'" RETURN
-    create_relay_multi_config "$tmp"
-    install_config "$tmp"
+    if ! create_relay_multi_config "$tmp"; then
+        restore_routes_file "$routes_backup"
+        die "生成 Relay 多线路配置失败，已恢复线路表"
+    fi
+    if ! install_config "$tmp"; then
+        restore_routes_file "$routes_backup"
+        die "安装 Relay 配置失败，已恢复线路表"
+    fi
     open_firewall_port "$RELAY_PORT"
-    restart_xray
+    if ! restart_xray; then
+        rollback_config_and_routes "$routes_backup"
+        die "Xray 重启失败，已回滚配置和线路表"
+    fi
 
     relay_ip=$(get_public_ip)
     write_info "relay" \
