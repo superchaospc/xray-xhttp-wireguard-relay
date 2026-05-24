@@ -44,11 +44,14 @@ PYEOF
 }
 
 run_config_generation_test() {
-    local sourceable tmp_exit tmp_relay
-    sourceable="$(mktemp /tmp/vps2vps-source.XXXXXX.sh)"
-    tmp_exit="$(mktemp /tmp/vps2vps-exit.XXXXXX.json)"
-    tmp_relay="$(mktemp /tmp/vps2vps-relay.XXXXXX.json)"
-    trap "rm -f '$sourceable' '$tmp_exit' '$tmp_relay'" RETURN
+    local sourceable tmp_exit tmp_relay tmp_routes tmp_multi
+    sourceable="$(mktemp /tmp/vps2vps-source.XXXXXX)"
+    tmp_exit="$(mktemp /tmp/vps2vps-exit.XXXXXX)"
+    tmp_relay="$(mktemp /tmp/vps2vps-relay.XXXXXX)"
+    tmp_routes="$(mktemp /tmp/vps2vps-routes.XXXXXX)"
+    tmp_multi="$(mktemp /tmp/vps2vps-relay-multi.XXXXXX)"
+    # shellcheck disable=SC2064
+    trap "rm -f '$sourceable' '$tmp_exit' '$tmp_relay' '$tmp_routes' '$tmp_multi'" RETURN
 
     make_sourceable_copy "$sourceable"
 
@@ -65,6 +68,7 @@ run_config_generation_test() {
 
         CLIENT_UUID="22222222-2222-4222-8222-222222222222"
         CLIENT_PRIVATE_KEY="relay_private_key_for_shape_test"
+        CLIENT_PUBLIC_KEY="relay_public_key_for_shape_test"
         CLIENT_SHORT_ID="dcba4321dcba4321"
         RELAY_PORT="443"
         EXIT_HOST="203.0.113.10"
@@ -77,14 +81,33 @@ run_config_generation_test() {
         REALITY_DEST="www.cloudflare.com:443"
         REALITY_SERVER_NAME="www.cloudflare.com"
         create_relay_config "$2"
-    ' "$sourceable" "$tmp_exit" "$tmp_relay"
 
-    python3 - "$tmp_exit" "$tmp_relay" <<'PYEOF'
+        ROUTES_FILE="$3"
+        ROUTE_NAME="Spain"
+        save_relay_route "$ROUTE_NAME"
+        RELAY_PORT="8443"
+        CLIENT_UUID="33333333-3333-4333-8333-333333333333"
+        CLIENT_PRIVATE_KEY="relay_private_key_for_second_route"
+        CLIENT_PUBLIC_KEY="relay_public_key_for_second_route"
+        CLIENT_SHORT_ID="eeee4321eeee4321"
+        EXIT_HOST="198.51.100.20"
+        EXIT_PORT="443"
+        EXIT_UUID="44444444-4444-4444-8444-444444444444"
+        EXIT_PUBLIC_KEY="second_exit_public_key"
+        EXIT_SHORT_ID="ffff1234ffff1234"
+        EXIT_SNI="www.cloudflare.com"
+        ROUTE_NAME="Germany"
+        save_relay_route "$ROUTE_NAME"
+        create_relay_multi_config "$4"
+    ' "$sourceable" "$tmp_exit" "$tmp_relay" "$tmp_routes" "$tmp_multi"
+
+    python3 - "$tmp_exit" "$tmp_relay" "$tmp_multi" <<'PYEOF'
 import json
 import sys
 
 exit_config = json.load(open(sys.argv[1]))
 relay_config = json.load(open(sys.argv[2]))
+multi_config = json.load(open(sys.argv[3]))
 
 assert exit_config["inbounds"][0]["protocol"] == "vless"
 assert exit_config["inbounds"][0]["streamSettings"]["security"] == "reality"
@@ -96,6 +119,12 @@ assert relay_config["inbounds"][0]["streamSettings"]["security"] == "reality"
 assert relay_config["outbounds"][0]["tag"] == "to-exit"
 assert relay_config["outbounds"][0]["streamSettings"]["security"] == "reality"
 assert relay_config["routing"]["rules"][-1]["outboundTag"] == "to-exit"
+
+assert len(multi_config["inbounds"]) == 2
+assert {i["port"] for i in multi_config["inbounds"]} == {443, 8443}
+assert {o["tag"] for o in multi_config["outbounds"][:2]} == {"to-exit-443", "to-exit-8443"}
+assert multi_config["routing"]["rules"][-2]["outboundTag"] == "to-exit-443"
+assert multi_config["routing"]["rules"][-1]["outboundTag"] == "to-exit-8443"
 PYEOF
 
     pass "config generation"
@@ -103,7 +132,8 @@ PYEOF
 
 run_exit_bundle_test() {
     local sourceable
-    sourceable="$(mktemp /tmp/vps2vps-source.XXXXXX.sh)"
+    sourceable="$(mktemp /tmp/vps2vps-source.XXXXXX)"
+    # shellcheck disable=SC2064
     trap "rm -f '$sourceable'" RETURN
     make_sourceable_copy "$sourceable"
 

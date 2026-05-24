@@ -25,6 +25,7 @@ NC='\033[0m'
 
 CONFIG_FILE="/usr/local/etc/xray/config.json"
 INFO_FILE="/root/xray_vps2vps_info.json"
+ROUTES_FILE="/root/xray_vps2vps_routes.json"
 SYSCTL_FILE="/etc/sysctl.d/99-xray-vps2vps.conf"
 IP_CACHE_FILE="/root/.xray_vps2vps_ip"
 SCRIPT_PATH="/root/xray_vps2vps_deploy.sh"
@@ -78,6 +79,7 @@ print_install_flow() {
     echo "  Step 2: Exit 完成后，复制它输出的整段 Relay 安装命令。"
     echo "  Step 3: 再登录中转 VPS，粘贴那段命令安装 Relay。"
     echo "  Step 4: 扫 Relay 输出的二维码，或导入 vless:// 链接。"
+    echo "  多线路: 继续新增落地 VPS 时，重复 Step 1 和 Step 3，每条线路使用不同 Relay 入口端口。"
 }
 
 require_root() {
@@ -117,15 +119,18 @@ Xray VPS -> VPS 中转部署工具
 用法:
   ./xray_vps2vps_deploy.sh              进入推荐向导菜单
   ./xray_vps2vps_deploy.sh --exit       直接安装落地 Exit
-  ./xray_vps2vps_deploy.sh --relay      直接安装中转 Relay
+  ./xray_vps2vps_deploy.sh --relay      给中转 Relay 添加/更新一条落地线路
+  ./xray_vps2vps_deploy.sh --list       查看 Relay 上所有线路
+  ./xray_vps2vps_deploy.sh --delete     删除 Relay 上的一条线路
   ./xray_vps2vps_deploy.sh --status     查看状态
   ./xray_vps2vps_deploy.sh --help       显示帮助
 
 推荐流程:
   1. 第一台：在落地 VPS 上运行脚本，选择 Exit 安装。
   2. Exit 安装完成后，复制脚本输出的整段 Relay 安装命令。
-  3. 第二台：在中转 VPS 上粘贴执行这段命令。
+  3. 第二台：在中转 VPS 上粘贴执行这段命令，添加一条线路。
   4. 扫 Relay 输出的二维码或导入 vless:// 链接。
+  5. 要添加更多落地 VPS，重复 Step 1 和 Step 3，并为每条线路使用不同 Relay 入口端口。
 
 可选变量:
   AUTO_YES=1             使用默认值/环境变量，适合复制的一键命令
@@ -170,6 +175,26 @@ if len(labels) < 2:
     sys.exit(1)
 pattern = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 sys.exit(0 if all(pattern.match(label) for label in labels) else 1)
+PYEOF
+}
+
+route_port_exists() {
+    local port="$1"
+    [ -f "$ROUTES_FILE" ] || return 1
+    ROUTES_FILE="$ROUTES_FILE" CHECK_RELAY_PORT="$port" python3 - <<'PYEOF'
+import json
+import os
+import sys
+
+try:
+    data = json.load(open(os.environ["ROUTES_FILE"]))
+except Exception:
+    sys.exit(1)
+port = os.environ["CHECK_RELAY_PORT"]
+for route in data.get("routes", []):
+    if str(route.get("relay_port")) == port:
+        sys.exit(0)
+sys.exit(1)
 PYEOF
 }
 
@@ -410,6 +435,7 @@ print_relay_oneclick_command() {
     echo -e "${YELLOW}EXIT_BUNDLE='${bundle}' RELAY_PORT='443' AUTO_YES=1 ${SCRIPT_PATH} --relay${NC}"
     echo ""
     echo -e "${CYAN}这段命令只应该在 Relay VPS 上执行，不要回到当前 Exit VPS 执行。${NC}"
+    echo -e "${CYAN}同一台 Relay 添加第二条及以上线路时，请把 RELAY_PORT 改成未使用端口。${NC}"
 }
 
 create_exit_config() {
@@ -552,6 +578,178 @@ os.chmod(os.environ["CONFIG_OUT"], 0o600)
 PYEOF
 }
 
+save_relay_route() {
+    local route_name="$1"
+    ROUTES_FILE="$ROUTES_FILE" ROUTE_NAME="$route_name" \
+    RELAY_PORT="$RELAY_PORT" CLIENT_UUID="$CLIENT_UUID" CLIENT_PRIVATE_KEY="$CLIENT_PRIVATE_KEY" \
+    CLIENT_PUBLIC_KEY="$CLIENT_PUBLIC_KEY" CLIENT_SHORT_ID="$CLIENT_SHORT_ID" \
+    EXIT_HOST="$EXIT_HOST" EXIT_PORT="$EXIT_PORT" EXIT_UUID="$EXIT_UUID" \
+    EXIT_PUBLIC_KEY="$EXIT_PUBLIC_KEY" EXIT_SHORT_ID="$EXIT_SHORT_ID" EXIT_SNI="$EXIT_SNI" \
+    REALITY_SERVER_NAME="$REALITY_SERVER_NAME" CLIENT_FP="$CLIENT_FP" \
+    python3 - <<'PYEOF'
+import json
+import os
+import time
+
+path = os.environ["ROUTES_FILE"]
+relay_port = os.environ["RELAY_PORT"]
+route = {
+    "name": os.environ["ROUTE_NAME"],
+    "relay_port": relay_port,
+    "client_uuid": os.environ["CLIENT_UUID"],
+    "client_private_key": os.environ["CLIENT_PRIVATE_KEY"],
+    "client_public_key": os.environ["CLIENT_PUBLIC_KEY"],
+    "client_short_id": os.environ["CLIENT_SHORT_ID"],
+    "client_sni": os.environ["REALITY_SERVER_NAME"],
+    "client_fp": os.environ["CLIENT_FP"],
+    "exit_host": os.environ["EXIT_HOST"],
+    "exit_port": os.environ["EXIT_PORT"],
+    "exit_uuid": os.environ["EXIT_UUID"],
+    "exit_public_key": os.environ["EXIT_PUBLIC_KEY"],
+    "exit_short_id": os.environ["EXIT_SHORT_ID"],
+    "exit_sni": os.environ["EXIT_SNI"],
+    "updated_at": int(time.time()),
+}
+try:
+    with open(path) as f:
+        data = json.load(f)
+except Exception:
+    data = {"routes": []}
+if not isinstance(data, dict) or not isinstance(data.get("routes"), list):
+    data = {"routes": []}
+routes = [r for r in data["routes"] if str(r.get("relay_port")) != relay_port]
+routes.append(route)
+routes.sort(key=lambda r: int(r["relay_port"]))
+data = {"routes": routes}
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+PYEOF
+}
+
+create_relay_multi_config() {
+    local tmp="$1"
+    ROUTES_FILE="$ROUTES_FILE" CONFIG_OUT="$tmp" REALITY_DEST="$REALITY_DEST" \
+    python3 - <<'PYEOF'
+import json
+import os
+import sys
+
+routes_path = os.environ["ROUTES_FILE"]
+try:
+    with open(routes_path) as f:
+        data = json.load(f)
+except FileNotFoundError:
+    print(f"routes file not found: {routes_path}", file=sys.stderr)
+    sys.exit(1)
+routes = data.get("routes", [])
+if not isinstance(routes, list) or not routes:
+    print("no relay routes configured", file=sys.stderr)
+    sys.exit(1)
+
+seen_ports = set()
+inbounds = []
+outbounds = []
+rules = [{"type": "field", "protocol": ["bittorrent"], "outboundTag": "block"}]
+
+required = [
+    "name", "relay_port", "client_uuid", "client_private_key", "client_short_id",
+    "client_sni", "exit_host", "exit_port", "exit_uuid", "exit_public_key",
+    "exit_short_id", "exit_sni"
+]
+for route in routes:
+    for key in required:
+        if not str(route.get(key, "")).strip():
+            print(f"route missing {key}", file=sys.stderr)
+            sys.exit(1)
+    relay_port = int(route["relay_port"])
+    if not 1 <= relay_port <= 65535:
+        print(f"invalid relay_port: {relay_port}", file=sys.stderr)
+        sys.exit(1)
+    if relay_port in seen_ports:
+        print(f"duplicate relay_port: {relay_port}", file=sys.stderr)
+        sys.exit(1)
+    seen_ports.add(relay_port)
+
+    inbound_tag = f"client-in-{relay_port}"
+    outbound_tag = f"to-exit-{relay_port}"
+    inbounds.append({
+        "tag": inbound_tag,
+        "listen": "0.0.0.0",
+        "port": relay_port,
+        "protocol": "vless",
+        "_remark": route["name"],
+        "settings": {
+            "clients": [{
+                "id": route["client_uuid"],
+                "flow": "xtls-rprx-vision"
+            }],
+            "decryption": "none"
+        },
+        "streamSettings": {
+            "network": "tcp",
+            "security": "reality",
+            "realitySettings": {
+                "show": False,
+                "dest": os.environ["REALITY_DEST"],
+                "xver": 0,
+                "serverNames": [route["client_sni"]],
+                "privateKey": route["client_private_key"],
+                "shortIds": [route["client_short_id"]]
+            },
+            "sockopt": {"tcpFastOpen": True, "tcpNoDelay": True}
+        },
+        "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
+    })
+    outbounds.append({
+        "tag": outbound_tag,
+        "protocol": "vless",
+        "_remark": route["name"],
+        "settings": {
+            "vnext": [{
+                "address": route["exit_host"],
+                "port": int(route["exit_port"]),
+                "users": [{
+                    "id": route["exit_uuid"],
+                    "encryption": "none",
+                    "flow": "xtls-rprx-vision"
+                }]
+            }]
+        },
+        "streamSettings": {
+            "network": "tcp",
+            "security": "reality",
+            "realitySettings": {
+                "serverName": route["exit_sni"],
+                "fingerprint": route.get("client_fp") or "chrome",
+                "publicKey": route["exit_public_key"],
+                "shortId": route["exit_short_id"],
+                "spiderX": "/"
+            },
+            "sockopt": {"tcpFastOpen": True, "tcpNoDelay": True}
+        }
+    })
+    rules.append({
+        "type": "field",
+        "inboundTag": [inbound_tag],
+        "outboundTag": outbound_tag
+    })
+
+config = {
+    "log": {"loglevel": "warning"},
+    "inbounds": inbounds,
+    "outbounds": outbounds + [
+        {"tag": "direct", "protocol": "freedom"},
+        {"tag": "block", "protocol": "blackhole"}
+    ],
+    "routing": {"domainStrategy": "IPIfNonMatch", "rules": rules}
+}
+with open(os.environ["CONFIG_OUT"], "w") as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+os.chmod(os.environ["CONFIG_OUT"], 0o600)
+PYEOF
+}
+
 install_config() {
     local tmp="$1"
     mkdir -p "$(dirname "$CONFIG_FILE")"
@@ -615,6 +813,135 @@ print_client_link() {
     fi
 }
 
+print_route_link() {
+    local relay_host="$1"
+    local relay_port="$2"
+    local client_uuid="$3"
+    local client_public_key="$4"
+    local client_short_id="$5"
+    local client_sni="$6"
+    local route_name="$7"
+    local encoded_remark link
+    encoded_remark=$(url_encode "$route_name")
+    link="vless://${client_uuid}@${relay_host}:${relay_port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${client_sni}&fp=${CLIENT_FP}&pbk=${client_public_key}&sid=${client_short_id}&type=tcp#${encoded_remark}"
+    echo -e "${YELLOW}${link}${NC}"
+}
+
+list_relay_routes() {
+    if [ ! -f "$ROUTES_FILE" ]; then
+        warn "未找到 Relay 线路表：$ROUTES_FILE"
+        return 0
+    fi
+
+    local relay_ip
+    relay_ip=$(get_public_ip)
+    ROUTES_FILE="$ROUTES_FILE" RELAY_IP="$relay_ip" CLIENT_FP="$CLIENT_FP" python3 - <<'PYEOF'
+import json
+import os
+from urllib.parse import quote
+
+path = os.environ["ROUTES_FILE"]
+with open(path) as f:
+    data = json.load(f)
+routes = data.get("routes", [])
+if not routes:
+    print("暂无 Relay 线路")
+    raise SystemExit(0)
+
+print("Relay 线路列表:")
+for idx, route in enumerate(routes, 1):
+    name = route["name"]
+    relay_port = route["relay_port"]
+    exit_host = route["exit_host"]
+    exit_port = route["exit_port"]
+    print(f"{idx}. {name}")
+    print(f"   Relay: {os.environ['RELAY_IP']}:{relay_port}")
+    print(f"   Exit:  {exit_host}:{exit_port}")
+    link = (
+        f"vless://{route['client_uuid']}@{os.environ['RELAY_IP']}:{relay_port}"
+        f"?encryption=none&flow=xtls-rprx-vision&security=reality"
+        f"&sni={route['client_sni']}&fp={route.get('client_fp') or os.environ['CLIENT_FP']}"
+        f"&pbk={route['client_public_key']}&sid={route['client_short_id']}"
+        f"&type=tcp#{quote(name, safe='')}"
+    )
+    print(f"   Link:  {link}")
+PYEOF
+}
+
+delete_relay_route() {
+    if [ ! -f "$ROUTES_FILE" ]; then
+        warn "未找到 Relay 线路表：$ROUTES_FILE"
+        return 0
+    fi
+
+    list_relay_routes
+    echo ""
+    prompt DELETE_RELAY_PORT "要删除的 Relay 入口端口"
+    valid_port "$DELETE_RELAY_PORT" || die "端口必须是 1-65535"
+
+    local remaining
+    remaining=$(ROUTES_FILE="$ROUTES_FILE" DELETE_RELAY_PORT="$DELETE_RELAY_PORT" python3 - <<'PYEOF'
+import json
+import os
+import sys
+
+path = os.environ["ROUTES_FILE"]
+delete_port = os.environ["DELETE_RELAY_PORT"]
+with open(path) as f:
+    data = json.load(f)
+routes = data.get("routes", [])
+new_routes = [r for r in routes if str(r.get("relay_port")) != delete_port]
+if len(new_routes) == len(routes):
+    print(f"ERR: 未找到端口 {delete_port} 对应的线路", file=sys.stderr)
+    sys.exit(2)
+data = {"routes": new_routes}
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+print(len(new_routes))
+PYEOF
+)
+
+    if [ "$remaining" -eq 0 ]; then
+        warn "已删除最后一条线路，正在停止 Xray。"
+        systemctl stop xray >/dev/null 2>&1 || true
+        ok "线路已删除"
+        return 0
+    fi
+
+    local tmp
+    tmp=$(mktemp /tmp/xray-vps2vps-relay.XXXXXX.json)
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmp'" RETURN
+    create_relay_multi_config "$tmp"
+    install_config "$tmp"
+    restart_xray
+    ok "线路已删除，其余 ${remaining} 条线路不受影响"
+}
+
+relay_manager() {
+    while true; do
+        print_banner
+        echo "Relay 多线路管理（每条线路使用一个独立入口端口）"
+        echo ""
+        echo "1) 添加/更新一条落地线路"
+        echo "2) 删除一条线路"
+        echo "3) 查看所有线路和客户端链接"
+        echo "4) 重启 Xray"
+        echo "0) 返回"
+        echo ""
+        read -r -p "请选择: " relay_choice
+        case "$relay_choice" in
+            1) install_relay; break ;;
+            2) delete_relay_route; break ;;
+            3) list_relay_routes; read -r -p "按回车返回菜单..." _ ;;
+            4) restart_xray; read -r -p "按回车返回菜单..." _ ;;
+            0) return ;;
+            *) echo -e "${RED}无效选择${NC}" ;;
+        esac
+    done
+}
+
 install_exit() {
     echo -e "${GREEN}[Exit VPS 部署]${NC}"
     echo -e "${CYAN}当前步骤：Step 1 / 2，在落地 VPS 上安装 Exit。${NC}"
@@ -665,8 +992,8 @@ install_exit() {
 }
 
 install_relay() {
-    echo -e "${GREEN}[Relay VPS 部署]${NC}"
-    echo -e "${CYAN}当前步骤：Step 2 / 2，在中转 VPS 上安装 Relay。${NC}"
+    echo -e "${GREEN}[Relay VPS 添加/更新线路]${NC}"
+    echo -e "${CYAN}当前步骤：在中转 VPS 上添加一条落地线路。${NC}"
     if load_exit_bundle; then
         :
     elif [ "$AUTO_YES" != "1" ]; then
@@ -677,12 +1004,22 @@ install_relay() {
             *) echo "已取消。请先去落地 VPS 安装 Exit。"; exit 0 ;;
         esac
     fi
-    prompt RELAY_PORT "Relay 对客户端监听端口" "${RELAY_PORT:-443}"
+    prompt RELAY_PORT "这条线路的 Relay 入口端口" "${RELAY_PORT:-443}"
     valid_port "$RELAY_PORT" || die "端口必须是 1-65535"
+    if route_port_exists "$RELAY_PORT" && [ "${ALLOW_OVERWRITE:-0}" != "1" ]; then
+        if [ "$AUTO_YES" = "1" ]; then
+            die "Relay 端口 ${RELAY_PORT} 已有线路。新增其他落地 VPS 时，请把命令里的 RELAY_PORT 改成未使用端口，例如 8443。若要覆盖旧线路，请设置 ALLOW_OVERWRITE=1"
+        fi
+        warn "Relay 端口 ${RELAY_PORT} 已有线路。"
+        read -r -p "覆盖这条线路? (y/n): " overwrite_choice
+        case "$overwrite_choice" in
+            y|Y) ;;
+            *) echo "已取消。请换一个 RELAY_PORT 后重试。"; exit 0 ;;
+        esac
+    fi
     if port_in_use "$RELAY_PORT"; then
         warn "端口 $RELAY_PORT 看起来已被占用；如果是旧 Xray 配置，可继续覆盖后重启"
     fi
-
     prompt EXIT_HOST "Exit Host/IP" "${EXIT_HOST:-}"
     valid_host "$EXIT_HOST" || die "Exit Host/IP 格式不合法"
     prompt EXIT_PORT "Exit Port" "${EXIT_PORT:-443}"
@@ -695,6 +1032,9 @@ install_relay() {
     valid_short_id "$EXIT_SHORT_ID" || die "Exit Short ID 必须是偶数长度十六进制，长度 2-16"
     prompt EXIT_SNI "Exit SNI" "${EXIT_SNI:-$REALITY_SERVER_NAME}"
     [ -n "$EXIT_SNI" ] || die "Exit SNI 不能为空"
+    ROUTE_NAME_DEFAULT="Exit-${EXIT_HOST}-${RELAY_PORT}"
+    prompt ROUTE_NAME "线路名称" "${ROUTE_NAME:-$ROUTE_NAME_DEFAULT}"
+    [ -n "$ROUTE_NAME" ] || die "线路名称不能为空"
 
     install_deps
     install_xray
@@ -704,12 +1044,13 @@ install_relay() {
     CLIENT_PRIVATE_KEY="$PRIVATE_KEY"
     CLIENT_PUBLIC_KEY="$PUBLIC_KEY"
     CLIENT_SHORT_ID="$SHORT_ID"
+    save_relay_route "$ROUTE_NAME"
 
     local tmp relay_ip
     tmp=$(mktemp /tmp/xray-vps2vps-relay.XXXXXX.json)
     # shellcheck disable=SC2064
     trap "rm -f '$tmp'" RETURN
-    create_relay_config "$tmp"
+    create_relay_multi_config "$tmp"
     install_config "$tmp"
     open_firewall_port "$RELAY_PORT"
     restart_xray
@@ -722,28 +1063,31 @@ install_relay() {
         "client_public_key=$CLIENT_PUBLIC_KEY" \
         "client_short_id=$CLIENT_SHORT_ID" \
         "client_sni=$REALITY_SERVER_NAME" \
-        "exit_host=$EXIT_HOST" \
-        "exit_port=$EXIT_PORT"
+        "routes_file=$ROUTES_FILE"
 
     echo ""
     echo -e "${CYAN}╔═══════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║               Relay VPS 部署完成              ║${NC}"
+    echo -e "${CYAN}║              Relay 线路添加完成               ║${NC}"
     echo -e "${CYAN}╚═══════════════════════════════════════════════╝${NC}"
+    echo -e "线路名称:          ${YELLOW}${ROUTE_NAME}${NC}"
     echo -e "Relay Host:        ${YELLOW}${relay_ip}${NC}"
     echo -e "Relay Port:        ${YELLOW}${RELAY_PORT}${NC}"
+    echo -e "Exit:              ${YELLOW}${EXIT_HOST}:${EXIT_PORT}${NC}"
     echo -e "Client UUID:       ${YELLOW}$(redact "$CLIENT_UUID")${NC}"
     echo -e "Client Public Key: ${YELLOW}${CLIENT_PUBLIC_KEY}${NC}"
     echo -e "Client Short ID:   ${YELLOW}${CLIENT_SHORT_ID}${NC}"
     echo -e "Client SNI:        ${YELLOW}${REALITY_SERVER_NAME}${NC}"
-    print_client_link "$relay_ip" "VPS2VPS-Relay"
+    print_client_link "$relay_ip" "$ROUTE_NAME"
 }
 
 show_info() {
     if [ ! -f "$INFO_FILE" ]; then
         warn "未找到 $INFO_FILE"
-        return
+    else
+        python3 -m json.tool "$INFO_FILE" || cat "$INFO_FILE"
     fi
-    python3 -m json.tool "$INFO_FILE" || cat "$INFO_FILE"
+    echo ""
+    list_relay_routes || true
     echo ""
     systemctl status xray --no-pager -l | sed -n '1,12p' || true
 }
@@ -752,9 +1096,10 @@ guided_install() {
     print_banner
     print_install_flow
     echo ""
-    echo "请选择当前这台服务器要安装的角色："
+    echo "请选择当前这台服务器要安装/管理的角色："
     echo "1) Step 1: 安装 Exit 落地 VPS（第一台，最终出口 IP）"
-    echo "2) Step 2: 安装 Relay 中转 VPS（第二台，客户端入口）"
+    echo "2) Step 2: 在 Relay 中转 VPS 添加一条线路（第二台，客户端入口）"
+    echo "3) 管理 Relay 已有线路（查看/删除/重启）"
     echo "0) 返回"
     echo ""
     read -r -p "请选择: " role_choice
@@ -772,6 +1117,7 @@ guided_install() {
             fi
             install_relay
             ;;
+        3) relay_manager ;;
         0) return ;;
         *) echo -e "${RED}无效选择${NC}" ;;
     esac
@@ -789,7 +1135,7 @@ uninstall_all() {
         trap "rm -f '$tmp'" RETURN
         curl -fsSL --max-time 30 "$url" -o "$tmp" && bash "$tmp" remove || true
     fi
-    rm -f "$CONFIG_FILE" "$INFO_FILE" "$IP_CACHE_FILE"
+    rm -f "$CONFIG_FILE" "$INFO_FILE" "$ROUTES_FILE" "$IP_CACHE_FILE"
     ok "卸载流程已完成"
 }
 
@@ -800,10 +1146,11 @@ main_menu() {
         echo ""
         echo "1) 推荐向导安装（按 Step 1/Step 2 引导）"
         echo "2) Step 1: Install Exit VPS（落地 VPS，最终直连出站）"
-        echo "3) Step 2: Install Relay VPS（中转 VPS，客户端入口）"
+        echo "3) Step 2: Add Relay Route（中转 VPS 添加/更新一条线路）"
         echo "4) Show status / info"
         echo "5) Restart Xray"
-        echo "6) Uninstall"
+        echo "6) Relay route manager（查看/删除多条线路）"
+        echo "7) Uninstall"
         echo "0) Exit"
         echo ""
         read -r -p "请选择: " choice
@@ -813,7 +1160,8 @@ main_menu() {
             3) install_relay; break ;;
             4) show_info; read -r -p "按回车返回菜单..." _ ;;
             5) restart_xray; read -r -p "按回车返回菜单..." _ ;;
-            6) uninstall_all; break ;;
+            6) relay_manager; break ;;
+            7) uninstall_all; break ;;
             0) exit 0 ;;
             *) echo -e "${RED}无效选择${NC}" ;;
         esac
@@ -828,6 +1176,8 @@ require_root
 case "${1:-}" in
     --exit) install_exit ;;
     --relay) install_relay ;;
+    --list) list_relay_routes ;;
+    --delete) delete_relay_route ;;
     --guided|"") main_menu ;;
     --status) show_info ;;
     --restart) restart_xray ;;
