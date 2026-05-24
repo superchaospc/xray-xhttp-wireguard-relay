@@ -409,7 +409,6 @@ print_relay_oneclick_command() {
     echo -e "${YELLOW}chmod +x ${SCRIPT_PATH}${NC}"
     echo -e "${YELLOW}EXIT_BUNDLE='${bundle}' RELAY_PORT='443' AUTO_YES=1 ${SCRIPT_PATH} --relay${NC}"
     echo ""
-    echo -e "${CYAN}如果中转端口不是 443，把 RELAY_PORT 改成你要的端口。${NC}"
     echo -e "${CYAN}这段命令只应该在 Relay VPS 上执行，不要回到当前 Exit VPS 执行。${NC}"
 }
 

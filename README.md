@@ -73,8 +73,6 @@ chmod +x /root/xray_vps2vps_deploy.sh
 EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
 ```
 
-如果中转入口端口不是 `443`，把 `RELAY_PORT='443'` 改成你要的端口。
-
 如果你已经提前在 Relay VPS 上下载好了脚本，也可以只执行最后一行：
 
 ```bash
