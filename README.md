@@ -65,22 +65,21 @@ EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --rel
 ssh root@RELAY_VPS_IP
 ```
 
-如果 Step 1 输出的一键安装命令里已经包含 `curl` 和 `chmod`，可以直接整段粘贴，不需要重复下载。
-
-也可以先手动下载脚本：
+直接粘贴 Step 1 里 Exit 输出的整段 Relay 安装命令：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/superchaospc/xray-vps2vps-relay/main/xray_vps2vps_deploy.sh -o /root/xray_vps2vps_deploy.sh
 chmod +x /root/xray_vps2vps_deploy.sh
-```
-
-然后粘贴 Step 1 里 Exit 输出的 Relay 安装命令：
-
-```bash
 EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
 ```
 
 如果中转入口端口不是 `443`，把 `RELAY_PORT='443'` 改成你要的端口。
+
+如果你已经提前在 Relay VPS 上下载好了脚本，也可以只执行最后一行：
+
+```bash
+EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
+```
 
 ### Step 3：导入客户端
 
