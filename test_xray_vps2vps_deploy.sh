@@ -60,6 +60,14 @@ run_config_generation_test() {
     bash -c '
         source "$0"
 
+        REALITY_SITE="microsoft"
+        REALITY_SERVER_NAME=""
+        REALITY_DEST=""
+        REALITY_DEST_USER_SET=0
+        normalize_reality_site
+        [ "$REALITY_SERVER_NAME" = "www.microsoft.com" ]
+        [ "$REALITY_DEST" = "www.microsoft.com:443" ]
+
         UUID="11111111-1111-4111-8111-111111111111"
         PRIVATE_KEY="exit_private_key_for_shape_test"
         SHORT_ID="abcd1234abcd1234"
@@ -148,6 +156,7 @@ route_outbounds = [o for o in multi_config["outbounds"] if o["tag"].startswith("
 assert multi_config["api"]["services"] == ["StatsService"]
 assert len(route_inbounds) == 2
 assert {i["port"] for i in route_inbounds} == {443, 8443}
+assert {i["streamSettings"]["realitySettings"]["dest"] for i in route_inbounds} == {"www.cloudflare.com:443"}
 assert {o["tag"] for o in route_outbounds} == {"to-exit-443", "to-exit-8443"}
 assert multi_config["routing"]["rules"][-2]["outboundTag"] == "to-exit-443"
 assert multi_config["routing"]["rules"][-1]["outboundTag"] == "to-exit-8443"

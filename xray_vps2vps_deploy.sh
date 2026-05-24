@@ -34,8 +34,14 @@ BACKUP_KEEP="${BACKUP_KEEP:-5}"
 IP_CACHE_TTL="${IP_CACHE_TTL:-3600}"
 
 CLIENT_FP="${CLIENT_FP:-chrome}"
-REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-www.cloudflare.com}"
-REALITY_DEST="${REALITY_DEST:-${REALITY_SERVER_NAME}:443}"
+REALITY_SITE="${REALITY_SITE:-cloudflare}"
+REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-}"
+REALITY_DEST_USER_SET=0
+if [ -n "${REALITY_DEST:-}" ]; then
+    REALITY_DEST_USER_SET=1
+else
+    REALITY_DEST=""
+fi
 
 XRAY_INSTALL_REF="${XRAY_INSTALL_REF:-main}"
 XRAY_INSTALL_SHA256="${XRAY_INSTALL_SHA256:-}"
@@ -81,6 +87,7 @@ print_install_flow() {
     echo "  Step 3: 再登录中转 VPS，粘贴那段命令安装 Relay。"
     echo "  Step 4: 扫 Relay 输出的二维码，或导入 vless:// 链接。"
     echo "  多线路: 继续新增落地 VPS 时，重复 Step 1 和 Step 3，每条线路使用不同 Relay 入口端口。"
+    echo "  伪装站点: 可在安装时选择 Cloudflare / Microsoft / Apple / 自定义域名。"
 }
 
 require_root() {
@@ -140,7 +147,8 @@ Xray VPS -> VPS 中转部署工具
   EXIT_PORT=443          Exit 监听端口
   RELAY_PORT=443         Relay 对客户端监听端口
   EXIT_BUNDLE=...        Exit 输出的一键参数包，Relay 会自动解析
-  REALITY_SERVER_NAME=... REALITY SNI，默认 www.cloudflare.com
+  REALITY_SITE=cloudflare|microsoft|apple|custom
+  REALITY_SERVER_NAME=... 自定义 REALITY SNI
   CLIENT_FP=chrome       客户端指纹
 EOF
 }
@@ -179,6 +187,77 @@ if len(labels) < 2:
 pattern = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 sys.exit(0 if all(pattern.match(label) for label in labels) else 1)
 PYEOF
+}
+
+set_reality_server_name() {
+    local server_name="$1"
+    REALITY_SERVER_NAME="$server_name"
+    if [ "$REALITY_DEST_USER_SET" != "1" ]; then
+        REALITY_DEST="${REALITY_SERVER_NAME}:443"
+    fi
+}
+
+normalize_reality_site() {
+    local site
+    site=$(printf '%s' "${REALITY_SITE:-cloudflare}" | tr '[:upper:]' '[:lower:]')
+    case "$site" in
+        cloudflare|claudflare|cf|1)
+            REALITY_SITE="cloudflare"
+            set_reality_server_name "${REALITY_SERVER_NAME:-www.cloudflare.com}"
+            ;;
+        microsoft|ms|edge|2)
+            REALITY_SITE="microsoft"
+            set_reality_server_name "${REALITY_SERVER_NAME:-www.microsoft.com}"
+            ;;
+        apple|ios|safari|3)
+            REALITY_SITE="apple"
+            set_reality_server_name "${REALITY_SERVER_NAME:-www.apple.com}"
+            ;;
+        custom|4)
+            REALITY_SITE="custom"
+            [ -n "$REALITY_SERVER_NAME" ] || die "REALITY_SITE=custom 时必须设置 REALITY_SERVER_NAME"
+            set_reality_server_name "$REALITY_SERVER_NAME"
+            ;;
+        *)
+            if [ -n "$REALITY_SERVER_NAME" ]; then
+                REALITY_SITE="custom"
+                set_reality_server_name "$REALITY_SERVER_NAME"
+            else
+                die "未知 REALITY_SITE：$REALITY_SITE，可选 cloudflare / microsoft / apple / custom"
+            fi
+            ;;
+    esac
+    valid_host "$REALITY_SERVER_NAME" || die "REALITY_SERVER_NAME 格式不合法：$REALITY_SERVER_NAME"
+    [ -n "$REALITY_DEST" ] || REALITY_DEST="${REALITY_SERVER_NAME}:443"
+}
+
+choose_reality_site() {
+    local title="${1:-REALITY 伪装站点}"
+    if [ "$AUTO_YES" = "1" ]; then
+        normalize_reality_site
+        return
+    fi
+
+    echo ""
+    echo -e "${GREEN}[${title}]${NC}"
+    echo "1) Cloudflare  - www.cloudflare.com"
+    echo "2) Microsoft   - www.microsoft.com"
+    echo "3) Apple       - www.apple.com"
+    echo "4) 自定义域名"
+    echo ""
+    read -r -p "请选择伪装站点 [1]: " site_choice
+    case "${site_choice:-1}" in
+        1) REALITY_SITE="cloudflare"; REALITY_SERVER_NAME="";;
+        2) REALITY_SITE="microsoft"; REALITY_SERVER_NAME="";;
+        3) REALITY_SITE="apple"; REALITY_SERVER_NAME="";;
+        4)
+            REALITY_SITE="custom"
+            prompt REALITY_SERVER_NAME "自定义 REALITY SNI，例如 www.example.com"
+            ;;
+        *) die "无效选择：$site_choice" ;;
+    esac
+    normalize_reality_site
+    ok "已选择伪装站点：${REALITY_SITE} (${REALITY_SERVER_NAME})"
 }
 
 route_port_exists() {
@@ -292,6 +371,7 @@ for inbound in inbounds:
         "client_public_key": first_client_public_key(client_uuid),
         "client_short_id": (reality.get("shortIds") or [""])[0],
         "client_sni": (reality.get("serverNames") or [info.get("client_sni") or "www.cloudflare.com"])[0],
+        "client_dest": reality.get("dest", ""),
         "client_fp": outbound_reality.get("fingerprint") or "chrome",
         "exit_host": exit_host,
         "exit_port": str(server.get("port", "")),
@@ -555,7 +635,7 @@ print_relay_oneclick_command() {
     echo ""
     echo -e "${YELLOW}curl -fsSL ${SCRIPT_URL} -o ${SCRIPT_PATH}${NC}"
     echo -e "${YELLOW}chmod +x ${SCRIPT_PATH}${NC}"
-    echo -e "${YELLOW}EXIT_BUNDLE='${bundle}' RELAY_PORT='443' AUTO_YES=1 ${SCRIPT_PATH} --relay${NC}"
+    echo -e "${YELLOW}REALITY_SITE='${REALITY_SITE}' REALITY_SERVER_NAME='${REALITY_SERVER_NAME}' EXIT_BUNDLE='${bundle}' RELAY_PORT='443' AUTO_YES=1 ${SCRIPT_PATH} --relay${NC}"
     echo ""
     echo -e "${CYAN}这段命令只应该在 Relay VPS 上执行，不要回到当前 Exit VPS 执行。${NC}"
     echo -e "${CYAN}同一台 Relay 添加第二条及以上线路时，请把 RELAY_PORT 改成未使用端口。${NC}"
@@ -744,7 +824,7 @@ save_relay_route() {
     CLIENT_PUBLIC_KEY="$CLIENT_PUBLIC_KEY" CLIENT_SHORT_ID="$CLIENT_SHORT_ID" \
     EXIT_HOST="$EXIT_HOST" EXIT_PORT="$EXIT_PORT" EXIT_UUID="$EXIT_UUID" \
     EXIT_PUBLIC_KEY="$EXIT_PUBLIC_KEY" EXIT_SHORT_ID="$EXIT_SHORT_ID" EXIT_SNI="$EXIT_SNI" \
-    REALITY_SERVER_NAME="$REALITY_SERVER_NAME" CLIENT_FP="$CLIENT_FP" \
+    REALITY_SERVER_NAME="$REALITY_SERVER_NAME" REALITY_DEST="$REALITY_DEST" CLIENT_FP="$CLIENT_FP" \
     python3 - <<'PYEOF'
 import json
 import os
@@ -760,6 +840,7 @@ route = {
     "client_public_key": os.environ["CLIENT_PUBLIC_KEY"],
     "client_short_id": os.environ["CLIENT_SHORT_ID"],
     "client_sni": os.environ["REALITY_SERVER_NAME"],
+    "client_dest": os.environ["REALITY_DEST"],
     "client_fp": os.environ["CLIENT_FP"],
     "exit_host": os.environ["EXIT_HOST"],
     "exit_port": os.environ["EXIT_PORT"],
@@ -788,7 +869,7 @@ PYEOF
 
 create_relay_multi_config() {
     local tmp="$1"
-    ROUTES_FILE="$ROUTES_FILE" CONFIG_OUT="$tmp" REALITY_DEST="$REALITY_DEST" \
+    ROUTES_FILE="$ROUTES_FILE" CONFIG_OUT="$tmp" \
     python3 - <<'PYEOF'
 import json
 import os
@@ -841,6 +922,7 @@ for route in routes:
 
     inbound_tag = f"client-in-{relay_port}"
     outbound_tag = f"to-exit-{relay_port}"
+    client_dest = route.get("client_dest") or f"{route['client_sni']}:443"
     inbounds.append({
         "tag": inbound_tag,
         "listen": "0.0.0.0",
@@ -859,7 +941,7 @@ for route in routes:
             "security": "reality",
             "realitySettings": {
                 "show": False,
-                "dest": os.environ["REALITY_DEST"],
+                "dest": client_dest,
                 "xver": 0,
                 "serverNames": [route["client_sni"]],
                 "privateKey": route["client_private_key"],
@@ -1407,6 +1489,7 @@ install_exit() {
     echo -e "${CYAN}安装完成后再去第二台中转 VPS 安装 Relay。${NC}"
     prompt EXIT_PORT "Exit 监听端口" "${EXIT_PORT:-443}"
     valid_port "$EXIT_PORT" || die "端口必须是 1-65535"
+    choose_reality_site "Exit REALITY 伪装站点"
     if port_in_use "$EXIT_PORT"; then
         warn "端口 $EXIT_PORT 看起来已被占用；如果是旧 Xray 配置，可继续覆盖后重启"
     fi
@@ -1487,6 +1570,7 @@ install_relay() {
     if port_in_use "$RELAY_PORT"; then
         warn "端口 $RELAY_PORT 看起来已被占用；如果是旧 Xray 配置，可继续覆盖后重启"
     fi
+    choose_reality_site "Relay 对客户端的 REALITY 伪装站点"
     prompt EXIT_HOST "Exit Host/IP" "${EXIT_HOST:-}"
     valid_host "$EXIT_HOST" || die "Exit Host/IP 格式不合法"
     prompt EXIT_PORT "Exit Port" "${EXIT_PORT:-443}"
