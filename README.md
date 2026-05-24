@@ -16,28 +16,32 @@
 
 ## 推荐向导安装
 
-在两台 VPS 上下载同一个脚本：
+正常安装顺序是：**先安装落地 VPS（Exit），再安装中转 VPS（Relay）**。
+
+### Step 1：在落地 VPS 上安装 Exit
+
+先登录落地 VPS：
+
+```bash
+ssh root@EXIT_VPS_IP
+```
+
+下载并运行脚本：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/superchaospc/xray-vps2vps-relay/main/xray_vps2vps_deploy.sh -o /root/xray_vps2vps_deploy.sh
 chmod +x /root/xray_vps2vps_deploy.sh
-```
-
-如果你是在本地开发目录里，也可以手动上传：
-
-```bash
-scp xray_vps2vps_deploy.sh root@EXIT_VPS_IP:/root/
-scp xray_vps2vps_deploy.sh root@RELAY_VPS_IP:/root/
-```
-
-先在 Exit VPS 上：
-
-```bash
-chmod +x /root/xray_vps2vps_deploy.sh
 /root/xray_vps2vps_deploy.sh
 ```
 
-选择 `1) 推荐向导安装`，再选择 `1) Exit 落地 VPS`。部署完成后，脚本会输出两类信息：
+选择：
+
+```text
+1) 推荐向导安装
+1) Exit 落地 VPS
+```
+
+部署完成后，Exit 会输出：
 
 - `Exit Host`
 - `Exit Port`
@@ -45,9 +49,52 @@ chmod +x /root/xray_vps2vps_deploy.sh
 - `Exit Public Key`
 - `Exit Short ID`
 - `Exit SNI`
-- 一条 `EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay` 一键安装命令
+- 一条给 Relay VPS 使用的一键安装命令：
 
-然后在 Relay VPS 上直接粘贴这条一键命令。部署完成后导入脚本输出的客户端 VLESS 链接，或直接扫终端二维码。
+```bash
+EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
+```
+
+### Step 2：在中转 VPS 上安装 Relay
+
+再登录中转 VPS：
+
+```bash
+ssh root@RELAY_VPS_IP
+```
+
+下载脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/superchaospc/xray-vps2vps-relay/main/xray_vps2vps_deploy.sh -o /root/xray_vps2vps_deploy.sh
+chmod +x /root/xray_vps2vps_deploy.sh
+```
+
+然后粘贴 Step 1 里 Exit 输出的一键命令：
+
+```bash
+EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
+```
+
+如果中转入口端口不是 `443`，把 `RELAY_PORT='443'` 改成你要的端口。
+
+### Step 3：导入客户端
+
+Relay 部署完成后会输出：
+
+- `vless://...` 客户端链接
+- 终端二维码
+
+用 Shadowrocket、Neobox、V2rayN、V2rayNG、NekoBox 扫码或导入链接即可。
+
+### 手动上传脚本
+
+如果你是在本地开发目录里，也可以不用 `curl`，改为手动上传：
+
+```bash
+scp xray_vps2vps_deploy.sh root@EXIT_VPS_IP:/root/
+scp xray_vps2vps_deploy.sh root@RELAY_VPS_IP:/root/
+```
 
 ## 命令行方式
 
