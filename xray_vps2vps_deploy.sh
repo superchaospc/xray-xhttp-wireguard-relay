@@ -122,7 +122,9 @@ Xray VPS -> VPS 中转部署工具
   ./xray_vps2vps_deploy.sh --exit       直接安装落地 Exit
   ./xray_vps2vps_deploy.sh --relay      给中转 Relay 添加/更新一条落地线路
   ./xray_vps2vps_deploy.sh --list       查看 Relay 上所有线路
+  ./xray_vps2vps_deploy.sh --stats      查看线路流量统计
   ./xray_vps2vps_deploy.sh --delete     删除 Relay 上的一条线路
+  ./xray_vps2vps_deploy.sh --rename     修改线路名称
   ./xray_vps2vps_deploy.sh --status     查看状态
   ./xray_vps2vps_deploy.sh --help       显示帮助
 
@@ -569,7 +571,23 @@ import os
 
 config = {
     "log": {"loglevel": "warning"},
+    "stats": {},
+    "api": {"tag": "api", "services": ["StatsService"]},
+    "policy": {
+        "system": {
+            "statsInboundUplink": True,
+            "statsInboundDownlink": True,
+            "statsOutboundUplink": True,
+            "statsOutboundDownlink": True
+        }
+    },
     "inbounds": [{
+        "tag": "api-in",
+        "listen": "127.0.0.1",
+        "port": 10085,
+        "protocol": "dokodemo-door",
+        "settings": {"address": "127.0.0.1"}
+    }, {
         "tag": "from-relay",
         "listen": "0.0.0.0",
         "port": int(os.environ["LISTEN_PORT"]),
@@ -597,12 +615,14 @@ config = {
         "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
     }],
     "outbounds": [
+        {"tag": "api", "protocol": "freedom"},
         {"tag": "direct", "protocol": "freedom"},
         {"tag": "block", "protocol": "blackhole"}
     ],
     "routing": {
         "domainStrategy": "IPIfNonMatch",
         "rules": [
+            {"type": "field", "inboundTag": ["api-in"], "outboundTag": "api"},
             {"type": "field", "protocol": ["bittorrent"], "outboundTag": "block"},
             {"type": "field", "inboundTag": ["from-relay"], "outboundTag": "direct"}
         ]
@@ -627,7 +647,23 @@ import os
 
 config = {
     "log": {"loglevel": "warning"},
+    "stats": {},
+    "api": {"tag": "api", "services": ["StatsService"]},
+    "policy": {
+        "system": {
+            "statsInboundUplink": True,
+            "statsInboundDownlink": True,
+            "statsOutboundUplink": True,
+            "statsOutboundDownlink": True
+        }
+    },
     "inbounds": [{
+        "tag": "api-in",
+        "listen": "127.0.0.1",
+        "port": 10085,
+        "protocol": "dokodemo-door",
+        "settings": {"address": "127.0.0.1"}
+    }, {
         "tag": "client-in",
         "listen": "0.0.0.0",
         "port": int(os.environ["RELAY_PORT"]),
@@ -655,6 +691,7 @@ config = {
         "sniffing": {"enabled": True, "destOverride": ["http", "tls"]}
     }],
     "outbounds": [
+        {"tag": "api", "protocol": "freedom"},
         {
             "tag": "to-exit",
             "protocol": "vless",
@@ -688,6 +725,7 @@ config = {
     "routing": {
         "domainStrategy": "IPIfNonMatch",
         "rules": [
+            {"type": "field", "inboundTag": ["api-in"], "outboundTag": "api"},
             {"type": "field", "protocol": ["bittorrent"], "outboundTag": "block"},
             {"type": "field", "inboundTag": ["client-in"], "outboundTag": "to-exit"}
         ]
@@ -769,9 +807,18 @@ if not isinstance(routes, list) or not routes:
     sys.exit(1)
 
 seen_ports = set()
-inbounds = []
-outbounds = []
-rules = [{"type": "field", "protocol": ["bittorrent"], "outboundTag": "block"}]
+inbounds = [{
+    "tag": "api-in",
+    "listen": "127.0.0.1",
+    "port": 10085,
+    "protocol": "dokodemo-door",
+    "settings": {"address": "127.0.0.1"}
+}]
+outbounds = [{"tag": "api", "protocol": "freedom"}]
+rules = [
+    {"type": "field", "inboundTag": ["api-in"], "outboundTag": "api"},
+    {"type": "field", "protocol": ["bittorrent"], "outboundTag": "block"}
+]
 
 required = [
     "name", "relay_port", "client_uuid", "client_private_key", "client_short_id",
@@ -858,6 +905,16 @@ for route in routes:
 
 config = {
     "log": {"loglevel": "warning"},
+    "stats": {},
+    "api": {"tag": "api", "services": ["StatsService"]},
+    "policy": {
+        "system": {
+            "statsInboundUplink": True,
+            "statsInboundDownlink": True,
+            "statsOutboundUplink": True,
+            "statsOutboundDownlink": True
+        }
+    },
     "inbounds": inbounds,
     "outbounds": outbounds + [
         {"tag": "direct", "protocol": "freedom"},
@@ -1040,6 +1097,217 @@ for idx, route in enumerate(routes, 1):
 PYEOF
 }
 
+show_route_status() {
+    echo -e "${GREEN}[线路状态]${NC}"
+    if systemctl is-active --quiet xray; then
+        ok "Xray 服务运行中"
+    else
+        warn "Xray 服务未运行"
+    fi
+
+    if [ ! -f "$ROUTES_FILE" ]; then
+        warn "未找到 Relay 线路表：$ROUTES_FILE"
+        return 0
+    fi
+
+    ROUTES_FILE="$ROUTES_FILE" python3 - <<'PYEOF'
+import json
+import os
+
+routes = json.load(open(os.environ["ROUTES_FILE"])).get("routes", [])
+if not routes:
+    print("暂无 Relay 线路")
+    raise SystemExit(0)
+print("线路状态:")
+for route in routes:
+    print(f"- {route['name']}: Relay:{route['relay_port']} -> Exit:{route['exit_host']}:{route['exit_port']}")
+PYEOF
+
+    echo ""
+    echo "监听端口:"
+    while IFS= read -r port; do
+        [ -n "$port" ] || continue
+        if ss -tln 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}$"; then
+            echo -e "  ${GREEN}✓ ${port}/tcp 正在监听${NC}"
+        else
+            echo -e "  ${RED}✗ ${port}/tcp 未监听${NC}"
+        fi
+    done < <(ROUTES_FILE="$ROUTES_FILE" python3 - <<'PYEOF'
+import json
+import os
+try:
+    routes = json.load(open(os.environ["ROUTES_FILE"])).get("routes", [])
+except Exception:
+    routes = []
+for route in routes:
+    print(route.get("relay_port", ""))
+PYEOF
+)
+
+    echo ""
+    echo "落地连通性:"
+    while IFS=$'\t' read -r name host port; do
+        [ -n "$host" ] || continue
+        if timeout 5 bash -c "</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ ${name}: ${host}:${port} 可达${NC}"
+        else
+            echo -e "  ${RED}✗ ${name}: ${host}:${port} 不可达${NC}"
+        fi
+    done < <(ROUTES_FILE="$ROUTES_FILE" python3 - <<'PYEOF'
+import json
+import os
+try:
+    routes = json.load(open(os.environ["ROUTES_FILE"])).get("routes", [])
+except Exception:
+    routes = []
+for route in routes:
+    print(f"{route.get('name', '')}\t{route.get('exit_host', '')}\t{route.get('exit_port', '')}")
+PYEOF
+)
+}
+
+format_bytes_py='
+def fmt(n):
+    try:
+        n = int(n)
+    except Exception:
+        n = 0
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    value = float(n)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.2f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+'
+
+show_traffic_stats() {
+    echo -e "${GREEN}[流量统计]${NC}"
+    if [ ! -f "$ROUTES_FILE" ]; then
+        warn "未找到 Relay 线路表：$ROUTES_FILE"
+        return 0
+    fi
+    if ! systemctl is-active --quiet xray; then
+        warn "Xray 未运行，无法读取实时统计"
+        return 0
+    fi
+    if ! command -v xray >/dev/null 2>&1; then
+        warn "未找到 xray 命令"
+        return 0
+    fi
+
+    local stats_output
+    if ! stats_output=$(xray api statsquery --server=127.0.0.1:10085 -pattern ">>>traffic>>>" 2>/dev/null); then
+        warn "无法读取 Xray Stats API。请确认当前配置由新版脚本生成，并重启 Xray。"
+        return 0
+    fi
+
+    ROUTES_FILE="$ROUTES_FILE" STATS_RAW="$stats_output" python3 - <<PYEOF
+import json
+import os
+import re
+
+${format_bytes_py}
+
+routes = json.load(open(os.environ["ROUTES_FILE"])).get("routes", [])
+try:
+    payload = json.loads(os.environ["STATS_RAW"])
+except Exception:
+    payload = {}
+
+stats = {}
+for item in payload.get("stat", []) or payload.get("stats", []):
+    name = item.get("name", "")
+    value = int(item.get("value", 0))
+    stats[name] = value
+if not stats:
+    raw = os.environ["STATS_RAW"]
+    for name, value in re.findall(r'name:\\s*"([^"]+)"\\s*value:\\s*(\\d+)', raw, re.S):
+        stats[name] = int(value)
+
+def get(name):
+    return stats.get(name, 0)
+
+if not routes:
+    print("暂无 Relay 线路")
+    raise SystemExit(0)
+
+print("线路流量统计（Xray 启动以来）:")
+for route in routes:
+    port = str(route["relay_port"])
+    inbound = f"client-in-{port}"
+    outbound = f"to-exit-{port}"
+    in_up = get(f"inbound>>>{inbound}>>>traffic>>>uplink")
+    in_down = get(f"inbound>>>{inbound}>>>traffic>>>downlink")
+    out_up = get(f"outbound>>>{outbound}>>>traffic>>>uplink")
+    out_down = get(f"outbound>>>{outbound}>>>traffic>>>downlink")
+    print(f"- {route['name']} ({port} -> {route['exit_host']}:{route['exit_port']})")
+    print(f"  客户端上行: {fmt(in_up)}")
+    print(f"  客户端下行: {fmt(in_down)}")
+    print(f"  Relay 出站上行: {fmt(out_up)}")
+    print(f"  Relay 出站下行: {fmt(out_down)}")
+PYEOF
+}
+
+rename_relay_route() {
+    if [ ! -f "$ROUTES_FILE" ]; then
+        warn "未找到 Relay 线路表：$ROUTES_FILE"
+        return 0
+    fi
+
+    list_relay_routes
+    echo ""
+    prompt RENAME_RELAY_PORT "要修改名称的 Relay 入口端口"
+    valid_port "$RENAME_RELAY_PORT" || die "端口必须是 1-65535"
+    prompt NEW_ROUTE_NAME "新的线路名称"
+    [ -n "$NEW_ROUTE_NAME" ] || die "线路名称不能为空"
+
+    local routes_backup tmp
+    routes_backup=$(backup_routes_file)
+    if ! ROUTES_FILE="$ROUTES_FILE" RENAME_RELAY_PORT="$RENAME_RELAY_PORT" NEW_ROUTE_NAME="$NEW_ROUTE_NAME" python3 - <<'PYEOF'
+import json
+import os
+import sys
+
+path = os.environ["ROUTES_FILE"]
+port = os.environ["RENAME_RELAY_PORT"]
+new_name = os.environ["NEW_ROUTE_NAME"]
+data = json.load(open(path))
+routes = data.get("routes", [])
+changed = False
+for route in routes:
+    if str(route.get("relay_port")) == port:
+        route["name"] = new_name
+        changed = True
+if not changed:
+    print(f"未找到端口 {port} 对应的线路", file=sys.stderr)
+    sys.exit(1)
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump({"routes": routes}, f, indent=2, ensure_ascii=False)
+PYEOF
+    then
+        restore_routes_file "$routes_backup"
+        die "修改线路名称失败，已恢复线路表"
+    fi
+
+    tmp=$(mktemp /tmp/xray-vps2vps-relay.XXXXXX.json)
+    # shellcheck disable=SC2064
+    trap "rm -f '$tmp'" RETURN
+    if ! create_relay_multi_config "$tmp"; then
+        restore_routes_file "$routes_backup"
+        die "生成重命名后的 Relay 配置失败，已恢复线路表"
+    fi
+    if ! install_config "$tmp"; then
+        restore_routes_file "$routes_backup"
+        die "安装重命名后的 Relay 配置失败，已恢复线路表"
+    fi
+    if ! restart_xray; then
+        rollback_config_and_routes "$routes_backup"
+        die "Xray 重启失败，已回滚配置和线路表"
+    fi
+    ok "线路名称已修改"
+}
+
 delete_relay_route() {
     if [ ! -f "$ROUTES_FILE" ]; then
         warn "未找到 Relay 线路表：$ROUTES_FILE"
@@ -1110,17 +1378,23 @@ relay_manager() {
         echo "Relay 多线路管理（每条线路使用一个独立入口端口）"
         echo ""
         echo "1) 添加/更新一条落地线路"
-        echo "2) 删除一条线路"
-        echo "3) 查看所有线路和客户端链接"
-        echo "4) 重启 Xray"
+        echo "2) 查看线路状态"
+        echo "3) 流量统计"
+        echo "4) 删除一条线路"
+        echo "5) 修改线路名称"
+        echo "6) 查看所有线路和客户端链接"
+        echo "7) 重启 Xray"
         echo "0) 返回"
         echo ""
         read -r -p "请选择: " relay_choice
         case "$relay_choice" in
             1) install_relay; break ;;
-            2) delete_relay_route; break ;;
-            3) list_relay_routes; read -r -p "按回车返回菜单..." _ ;;
-            4) restart_xray; read -r -p "按回车返回菜单..." _ ;;
+            2) show_route_status; read -r -p "按回车返回菜单..." _ ;;
+            3) show_traffic_stats; read -r -p "按回车返回菜单..." _ ;;
+            4) delete_relay_route; break ;;
+            5) rename_relay_route; break ;;
+            6) list_relay_routes; read -r -p "按回车返回菜单..." _ ;;
+            7) restart_xray; read -r -p "按回车返回菜单..." _ ;;
             0) return ;;
             *) echo -e "${RED}无效选择${NC}" ;;
         esac
@@ -1303,7 +1577,7 @@ guided_install() {
     echo "请选择当前这台服务器要安装/管理的角色："
     echo "1) Step 1: 安装 Exit 落地 VPS（第一台，最终出口 IP）"
     echo "2) Step 2: 在 Relay 中转 VPS 添加一条线路（第二台，客户端入口）"
-    echo "3) 管理 Relay 已有线路（查看/删除/重启）"
+    echo "3) 管理 Relay 已有线路（状态/统计/删除/改名/重启）"
     echo "0) 返回"
     echo ""
     read -r -p "请选择: " role_choice
@@ -1351,10 +1625,11 @@ main_menu() {
         echo "1) 推荐向导安装（按 Step 1/Step 2 引导）"
         echo "2) Step 1: Install Exit VPS（落地 VPS，最终直连出站）"
         echo "3) Step 2: Add Relay Route（中转 VPS 添加/更新一条线路）"
-        echo "4) Show status / info"
-        echo "5) Restart Xray"
-        echo "6) Relay route manager（查看/删除多条线路）"
-        echo "7) Uninstall"
+        echo "4) Route status（查看线路状态）"
+        echo "5) Traffic stats（流量统计）"
+        echo "6) Relay route manager（查看/删除/改名多条线路）"
+        echo "7) Restart Xray"
+        echo "8) Uninstall"
         echo "0) Exit"
         echo ""
         read -r -p "请选择: " choice
@@ -1362,10 +1637,11 @@ main_menu() {
             1) guided_install; break ;;
             2) install_exit; break ;;
             3) install_relay; break ;;
-            4) show_info; read -r -p "按回车返回菜单..." _ ;;
-            5) restart_xray; read -r -p "按回车返回菜单..." _ ;;
+            4) show_route_status; read -r -p "按回车返回菜单..." _ ;;
+            5) show_traffic_stats; read -r -p "按回车返回菜单..." _ ;;
             6) relay_manager; break ;;
-            7) uninstall_all; break ;;
+            7) restart_xray; read -r -p "按回车返回菜单..." _ ;;
+            8) uninstall_all; break ;;
             0) exit 0 ;;
             *) echo -e "${RED}无效选择${NC}" ;;
         esac
@@ -1381,9 +1657,11 @@ case "${1:-}" in
     --exit) install_exit ;;
     --relay) install_relay ;;
     --list) list_relay_routes ;;
+    --stats) show_traffic_stats ;;
     --delete) delete_relay_route ;;
+    --rename) rename_relay_route ;;
     --guided|"") main_menu ;;
-    --status) show_info ;;
+    --status) show_route_status ;;
     --restart) restart_xray ;;
     *) print_help; die "未知参数：$1" ;;
 esac

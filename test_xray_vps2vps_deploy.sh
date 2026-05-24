@@ -127,20 +127,28 @@ relay_config = json.load(open(sys.argv[2]))
 multi_config = json.load(open(sys.argv[3]))
 migrated_routes = json.load(open(sys.argv[4]))["routes"]
 
-assert exit_config["inbounds"][0]["protocol"] == "vless"
-assert exit_config["inbounds"][0]["streamSettings"]["security"] == "reality"
-assert exit_config["outbounds"][0]["protocol"] == "freedom"
+exit_in = next(i for i in exit_config["inbounds"] if i["tag"] == "from-relay")
+relay_in = next(i for i in relay_config["inbounds"] if i["tag"] == "client-in")
+relay_out = next(o for o in relay_config["outbounds"] if o["tag"] == "to-exit")
+
+assert exit_config["api"]["services"] == ["StatsService"]
+assert exit_in["protocol"] == "vless"
+assert exit_in["streamSettings"]["security"] == "reality"
+assert any(o["tag"] == "api" for o in exit_config["outbounds"])
 assert exit_config["routing"]["rules"][-1]["outboundTag"] == "direct"
 
-assert relay_config["inbounds"][0]["protocol"] == "vless"
-assert relay_config["inbounds"][0]["streamSettings"]["security"] == "reality"
-assert relay_config["outbounds"][0]["tag"] == "to-exit"
-assert relay_config["outbounds"][0]["streamSettings"]["security"] == "reality"
+assert relay_config["api"]["services"] == ["StatsService"]
+assert relay_in["protocol"] == "vless"
+assert relay_in["streamSettings"]["security"] == "reality"
+assert relay_out["streamSettings"]["security"] == "reality"
 assert relay_config["routing"]["rules"][-1]["outboundTag"] == "to-exit"
 
-assert len(multi_config["inbounds"]) == 2
-assert {i["port"] for i in multi_config["inbounds"]} == {443, 8443}
-assert {o["tag"] for o in multi_config["outbounds"][:2]} == {"to-exit-443", "to-exit-8443"}
+route_inbounds = [i for i in multi_config["inbounds"] if i["tag"].startswith("client-in-")]
+route_outbounds = [o for o in multi_config["outbounds"] if o["tag"].startswith("to-exit-")]
+assert multi_config["api"]["services"] == ["StatsService"]
+assert len(route_inbounds) == 2
+assert {i["port"] for i in route_inbounds} == {443, 8443}
+assert {o["tag"] for o in route_outbounds} == {"to-exit-443", "to-exit-8443"}
 assert multi_config["routing"]["rules"][-2]["outboundTag"] == "to-exit-443"
 assert multi_config["routing"]["rules"][-1]["outboundTag"] == "to-exit-8443"
 assert len(migrated_routes) == 1

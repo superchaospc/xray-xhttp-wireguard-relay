@@ -114,12 +114,48 @@ EXIT_BUNDLE='...' RELAY_PORT='8443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --re
 
 如果误用已存在端口，脚本会拒绝覆盖，并提示换一个端口。确实要覆盖旧线路时，额外设置 `ALLOW_OVERWRITE=1`。
 
-## 查看和删除线路
+## Relay 管理菜单
+
+在中转 VPS 上直接运行脚本，会进入管理菜单：
+
+```bash
+/root/xray_vps2vps_deploy.sh
+```
+
+菜单包含：
+
+- 添加/更新落地线路
+- 查看线路状态：Xray 服务、本地监听端口、到 Exit 的 TCP 连通性
+- 流量统计：按线路显示 Xray 启动以来的上下行流量
+- 删除线路
+- 修改线路名称
+- 查看所有线路和客户端链接
+- 重启 Xray
+
+## 查看、统计和删除线路
 
 查看所有线路和客户端链接：
 
 ```bash
 /root/xray_vps2vps_deploy.sh --list
+```
+
+查看线路状态：
+
+```bash
+/root/xray_vps2vps_deploy.sh --status
+```
+
+查看流量统计：
+
+```bash
+/root/xray_vps2vps_deploy.sh --stats
+```
+
+修改线路名称：
+
+```bash
+/root/xray_vps2vps_deploy.sh --rename
 ```
 
 删除某条线路：
@@ -163,10 +199,12 @@ EXIT_BUNDLE='PASTE_EXIT_BUNDLE_HERE' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2
 /root/xray_vps2vps_deploy.sh --status
 ```
 
-查看 / 删除 Relay 线路：
+查看 / 统计 / 改名 / 删除 Relay 线路：
 
 ```bash
 /root/xray_vps2vps_deploy.sh --list
+/root/xray_vps2vps_deploy.sh --stats
+/root/xray_vps2vps_deploy.sh --rename
 /root/xray_vps2vps_deploy.sh --delete
 ```
 
