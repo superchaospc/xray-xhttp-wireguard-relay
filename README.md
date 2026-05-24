@@ -52,9 +52,9 @@ chmod +x /root/xray_vps2vps_deploy.sh
 安装时会让你选择 REALITY 伪装站点：
 
 ```text
-1) Cloudflare  - www.cloudflare.com
-2) Microsoft   - www.microsoft.com
-3) Apple       - www.apple.com
+1) Microsoft   - www.microsoft.com（推荐，避免被识别成 Cloudflare 反代）
+2) Apple       - www.apple.com
+3) Cloudflare  - www.cloudflare.com
 4) 自定义域名
 ```
 
@@ -71,7 +71,7 @@ chmod +x /root/xray_vps2vps_deploy.sh
 ```bash
 curl -fsSL https://raw.githubusercontent.com/superchaospc/xray-vps2vps-relay/main/xray_vps2vps_deploy.sh -o /root/xray_vps2vps_deploy.sh
 chmod +x /root/xray_vps2vps_deploy.sh
-REALITY_SITE='cloudflare' REALITY_SERVER_NAME='www.cloudflare.com' EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
+REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
 ```
 
 ### Step 2：在中转 VPS 上添加这条线路
@@ -87,7 +87,7 @@ ssh root@RELAY_VPS_IP
 ```bash
 curl -fsSL https://raw.githubusercontent.com/superchaospc/xray-vps2vps-relay/main/xray_vps2vps_deploy.sh -o /root/xray_vps2vps_deploy.sh
 chmod +x /root/xray_vps2vps_deploy.sh
-REALITY_SITE='cloudflare' REALITY_SERVER_NAME='www.cloudflare.com' EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
+REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
 ```
 
 如果你在 Exit 安装时选择了 Microsoft 或 Apple，Exit 输出的 Relay 一键命令会自动带上对应的 `REALITY_SITE` / `REALITY_SERVER_NAME`，Relay 对客户端的入口也会使用同一个伪装站点。
@@ -95,7 +95,7 @@ REALITY_SITE='cloudflare' REALITY_SERVER_NAME='www.cloudflare.com' EXIT_BUNDLE='
 如果你已经提前在 Relay VPS 上下载好了脚本，也可以只执行最后一行：
 
 ```bash
-REALITY_SITE='cloudflare' REALITY_SERVER_NAME='www.cloudflare.com' EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
+REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='...' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
 ```
 
 ### Step 3：导入客户端
@@ -201,7 +201,7 @@ scp xray_vps2vps_deploy.sh root@RELAY_VPS_IP:/root/
 Relay 支持读取 Exit 输出的参数包：
 
 ```bash
-REALITY_SITE='cloudflare' REALITY_SERVER_NAME='www.cloudflare.com' EXIT_BUNDLE='PASTE_EXIT_BUNDLE_HERE' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
+REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='PASTE_EXIT_BUNDLE_HERE' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
 ```
 
 查看状态：
@@ -230,7 +230,7 @@ REALITY_SITE=custom REALITY_SERVER_NAME=www.example.com REALITY_DEST=www.example
 常用变量：
 
 - `CLIENT_FP`：客户端指纹，默认 `chrome`。
-- `REALITY_SITE`：伪装站点预设，支持 `cloudflare` / `microsoft` / `apple` / `custom`，默认 `cloudflare`。
+- `REALITY_SITE`：伪装站点预设，支持 `microsoft` / `apple` / `cloudflare` / `custom`，默认 `microsoft`。
 - `REALITY_SERVER_NAME`：自定义 REALITY SNI。使用 `REALITY_SITE=custom` 时必填；预设模式下会自动设置。
 - `REALITY_DEST`：REALITY 回源目标，默认 `${REALITY_SERVER_NAME}:443`。
 - `XRAY_INSTALL_REF`：XTLS/Xray-install 的 ref，默认 `main`。

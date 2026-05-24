@@ -34,7 +34,7 @@ BACKUP_KEEP="${BACKUP_KEEP:-5}"
 IP_CACHE_TTL="${IP_CACHE_TTL:-3600}"
 
 CLIENT_FP="${CLIENT_FP:-chrome}"
-REALITY_SITE="${REALITY_SITE:-cloudflare}"
+REALITY_SITE="${REALITY_SITE:-microsoft}"
 REALITY_SERVER_NAME="${REALITY_SERVER_NAME:-}"
 REALITY_DEST_USER_SET=0
 if [ -n "${REALITY_DEST:-}" ]; then
@@ -147,7 +147,7 @@ Xray VPS -> VPS 中转部署工具
   EXIT_PORT=443          Exit 监听端口
   RELAY_PORT=443         Relay 对客户端监听端口
   EXIT_BUNDLE=...        Exit 输出的一键参数包，Relay 会自动解析
-  REALITY_SITE=cloudflare|microsoft|apple|custom
+  REALITY_SITE=microsoft|apple|cloudflare|custom
   REALITY_SERVER_NAME=... 自定义 REALITY SNI
   CLIENT_FP=chrome       客户端指纹
 EOF
@@ -199,19 +199,19 @@ set_reality_server_name() {
 
 normalize_reality_site() {
     local site
-    site=$(printf '%s' "${REALITY_SITE:-cloudflare}" | tr '[:upper:]' '[:lower:]')
+    site=$(printf '%s' "${REALITY_SITE:-microsoft}" | tr '[:upper:]' '[:lower:]')
     case "$site" in
-        cloudflare|claudflare|cf|1)
-            REALITY_SITE="cloudflare"
-            set_reality_server_name "${REALITY_SERVER_NAME:-www.cloudflare.com}"
-            ;;
-        microsoft|ms|edge|2)
+        microsoft|ms|edge|1)
             REALITY_SITE="microsoft"
             set_reality_server_name "${REALITY_SERVER_NAME:-www.microsoft.com}"
             ;;
-        apple|ios|safari|3)
+        apple|ios|safari|2)
             REALITY_SITE="apple"
             set_reality_server_name "${REALITY_SERVER_NAME:-www.apple.com}"
+            ;;
+        cloudflare|claudflare|cf|3)
+            REALITY_SITE="cloudflare"
+            set_reality_server_name "${REALITY_SERVER_NAME:-www.cloudflare.com}"
             ;;
         custom|4)
             REALITY_SITE="custom"
@@ -223,7 +223,7 @@ normalize_reality_site() {
                 REALITY_SITE="custom"
                 set_reality_server_name "$REALITY_SERVER_NAME"
             else
-                die "未知 REALITY_SITE：$REALITY_SITE，可选 cloudflare / microsoft / apple / custom"
+                die "未知 REALITY_SITE：$REALITY_SITE，可选 microsoft / apple / cloudflare / custom"
             fi
             ;;
     esac
@@ -240,16 +240,16 @@ choose_reality_site() {
 
     echo ""
     echo -e "${GREEN}[${title}]${NC}"
-    echo "1) Cloudflare  - www.cloudflare.com"
-    echo "2) Microsoft   - www.microsoft.com"
-    echo "3) Apple       - www.apple.com"
+    echo "1) Microsoft   - www.microsoft.com（推荐，避免被识别成 Cloudflare 反代）"
+    echo "2) Apple       - www.apple.com"
+    echo "3) Cloudflare  - www.cloudflare.com"
     echo "4) 自定义域名"
     echo ""
     read -r -p "请选择伪装站点 [1]: " site_choice
     case "${site_choice:-1}" in
-        1) REALITY_SITE="cloudflare"; REALITY_SERVER_NAME="";;
-        2) REALITY_SITE="microsoft"; REALITY_SERVER_NAME="";;
-        3) REALITY_SITE="apple"; REALITY_SERVER_NAME="";;
+        1) REALITY_SITE="microsoft"; REALITY_SERVER_NAME="";;
+        2) REALITY_SITE="apple"; REALITY_SERVER_NAME="";;
+        3) REALITY_SITE="cloudflare"; REALITY_SERVER_NAME="";;
         4)
             REALITY_SITE="custom"
             prompt REALITY_SERVER_NAME "自定义 REALITY SNI，例如 www.example.com"
