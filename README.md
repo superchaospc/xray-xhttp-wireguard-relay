@@ -239,7 +239,7 @@ REALITY_SITE=custom REALITY_SERVER_NAME=www.example.com REALITY_DEST=www.example
 - `AUTO_YES=1`：使用默认值和环境变量，不再交互询问，适合一键安装命令。
 - `EXIT_BUNDLE`：Exit 输出的一键参数包，Relay 会自动解析。
 - `EXIT_PORT` / `RELAY_PORT`：分别指定 Exit 和 Relay 监听端口。
-- `ROUTE_NAME`：Relay 线路名称。
+- `ROUTE_NAME`：Relay 线路名称；默认使用落地 VPS 的 Host/IP。
 - `ALLOW_OVERWRITE=1`：允许用同一个 Relay 入口端口覆盖旧线路。
 
 ## 本地测试

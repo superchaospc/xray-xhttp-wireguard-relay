@@ -1583,7 +1583,7 @@ install_relay() {
     valid_short_id "$EXIT_SHORT_ID" || die "Exit Short ID 必须是偶数长度十六进制，长度 2-16"
     prompt EXIT_SNI "Exit SNI" "${EXIT_SNI:-$REALITY_SERVER_NAME}"
     [ -n "$EXIT_SNI" ] || die "Exit SNI 不能为空"
-    ROUTE_NAME_DEFAULT="Exit-${EXIT_HOST}-${RELAY_PORT}"
+    ROUTE_NAME_DEFAULT="$EXIT_HOST"
     prompt ROUTE_NAME "线路名称" "${ROUTE_NAME:-$ROUTE_NAME_DEFAULT}"
     [ -n "$ROUTE_NAME" ] || die "线路名称不能为空"
 
