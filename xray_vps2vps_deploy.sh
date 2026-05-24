@@ -198,6 +198,126 @@ sys.exit(1)
 PYEOF
 }
 
+migrate_existing_relay_config_if_needed() {
+    ROUTES_FILE="$ROUTES_FILE" CONFIG_FILE="$CONFIG_FILE" INFO_FILE="$INFO_FILE" \
+    python3 - <<'PYEOF'
+import json
+import os
+import sys
+import time
+
+routes_path = os.environ["ROUTES_FILE"]
+config_path = os.environ["CONFIG_FILE"]
+info_path = os.environ["INFO_FILE"]
+
+try:
+    with open(routes_path) as f:
+        existing = json.load(f)
+    if isinstance(existing, dict) and existing.get("routes"):
+        sys.exit(0)
+except Exception:
+    pass
+
+try:
+    with open(config_path) as f:
+        config = json.load(f)
+except Exception:
+    sys.exit(0)
+
+try:
+    with open(info_path) as f:
+        info = json.load(f)
+except Exception:
+    info = {}
+
+inbounds = config.get("inbounds", [])
+outbounds = {o.get("tag"): o for o in config.get("outbounds", []) if isinstance(o, dict)}
+rules = config.get("routing", {}).get("rules", [])
+
+def first_client_public_key(client_uuid):
+    if info.get("client_uuid") == client_uuid and info.get("client_public_key"):
+        return info["client_public_key"]
+    return info.get("client_public_key", "")
+
+routes = []
+for inbound in inbounds:
+    if not isinstance(inbound, dict):
+        continue
+    if inbound.get("protocol") != "vless":
+        continue
+    stream = inbound.get("streamSettings", {})
+    if stream.get("security") != "reality":
+        continue
+    inbound_tag = inbound.get("tag")
+    relay_port = inbound.get("port")
+    settings = inbound.get("settings", {})
+    clients = settings.get("clients") or []
+    reality = stream.get("realitySettings", {})
+    if not inbound_tag or not relay_port or not clients:
+        continue
+
+    outbound_tag = None
+    for rule in rules:
+        inbound_tags = rule.get("inboundTag") or []
+        if isinstance(inbound_tags, str):
+            inbound_tags = [inbound_tags]
+        if inbound_tag in inbound_tags:
+            outbound_tag = rule.get("outboundTag")
+            break
+    if not outbound_tag and len([k for k in outbounds if str(k).startswith("to-exit")]) == 1:
+        outbound_tag = [k for k in outbounds if str(k).startswith("to-exit")][0]
+    outbound = outbounds.get(outbound_tag)
+    if not outbound or outbound.get("protocol") != "vless":
+        continue
+
+    vnext = outbound.get("settings", {}).get("vnext") or []
+    if not vnext:
+        continue
+    server = vnext[0]
+    users = server.get("users") or []
+    outbound_reality = outbound.get("streamSettings", {}).get("realitySettings", {})
+    if not users:
+        continue
+
+    client_uuid = clients[0].get("id", "")
+    exit_host = server.get("address", "")
+    route = {
+        "name": info.get("route_name") or f"Migrated-{exit_host}-{relay_port}",
+        "relay_port": str(relay_port),
+        "client_uuid": client_uuid,
+        "client_private_key": reality.get("privateKey", ""),
+        "client_public_key": first_client_public_key(client_uuid),
+        "client_short_id": (reality.get("shortIds") or [""])[0],
+        "client_sni": (reality.get("serverNames") or [info.get("client_sni") or "www.cloudflare.com"])[0],
+        "client_fp": outbound_reality.get("fingerprint") or "chrome",
+        "exit_host": exit_host,
+        "exit_port": str(server.get("port", "")),
+        "exit_uuid": users[0].get("id", ""),
+        "exit_public_key": outbound_reality.get("publicKey", ""),
+        "exit_short_id": outbound_reality.get("shortId", ""),
+        "exit_sni": outbound_reality.get("serverName", ""),
+        "updated_at": int(time.time()),
+        "migrated": True,
+    }
+    required = [
+        "relay_port", "client_uuid", "client_private_key", "client_short_id",
+        "exit_host", "exit_port", "exit_uuid", "exit_public_key",
+        "exit_short_id", "exit_sni"
+    ]
+    if all(str(route.get(k, "")).strip() for k in required):
+        routes.append(route)
+
+if not routes:
+    sys.exit(0)
+
+routes.sort(key=lambda r: int(r["relay_port"]))
+fd = os.open(routes_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump({"routes": routes}, f, indent=2, ensure_ascii=False)
+print(f"MIGRATED={len(routes)}")
+PYEOF
+}
+
 port_in_use() {
     local port="$1"
     ss -tln 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}$"
@@ -1003,6 +1123,11 @@ install_relay() {
             y|Y) ;;
             *) echo "已取消。请先去落地 VPS 安装 Exit。"; exit 0 ;;
         esac
+    fi
+    local migrated_output
+    migrated_output=$(migrate_existing_relay_config_if_needed || true)
+    if [ -n "$migrated_output" ]; then
+        ok "已迁移旧版单线路配置到 Relay 线路表：${migrated_output#MIGRATED=}"
     fi
     prompt RELAY_PORT "这条线路的 Relay 入口端口" "${RELAY_PORT:-443}"
     valid_port "$RELAY_PORT" || die "端口必须是 1-65535"

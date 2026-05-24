@@ -44,14 +44,16 @@ PYEOF
 }
 
 run_config_generation_test() {
-    local sourceable tmp_exit tmp_relay tmp_routes tmp_multi
+    local sourceable tmp_exit tmp_relay tmp_routes tmp_multi tmp_migrate_routes tmp_info
     sourceable="$(mktemp /tmp/vps2vps-source.XXXXXX)"
     tmp_exit="$(mktemp /tmp/vps2vps-exit.XXXXXX)"
     tmp_relay="$(mktemp /tmp/vps2vps-relay.XXXXXX)"
     tmp_routes="$(mktemp /tmp/vps2vps-routes.XXXXXX)"
     tmp_multi="$(mktemp /tmp/vps2vps-relay-multi.XXXXXX)"
+    tmp_migrate_routes="$(mktemp /tmp/vps2vps-migrate-routes.XXXXXX)"
+    tmp_info="$(mktemp /tmp/vps2vps-info.XXXXXX)"
     # shellcheck disable=SC2064
-    trap "rm -f '$sourceable' '$tmp_exit' '$tmp_relay' '$tmp_routes' '$tmp_multi'" RETURN
+    trap "rm -f '$sourceable' '$tmp_exit' '$tmp_relay' '$tmp_routes' '$tmp_multi' '$tmp_migrate_routes' '$tmp_info'" RETURN
 
     make_sourceable_copy "$sourceable"
 
@@ -82,6 +84,21 @@ run_config_generation_test() {
         REALITY_SERVER_NAME="www.cloudflare.com"
         create_relay_config "$2"
 
+        INFO_FILE="$5"
+        python3 - "$INFO_FILE" <<PY
+import json, sys
+json.dump({
+    "role": "relay",
+    "client_uuid": "22222222-2222-4222-8222-222222222222",
+    "client_public_key": "relay_public_key_for_shape_test",
+    "client_short_id": "dcba4321dcba4321",
+    "client_sni": "www.cloudflare.com"
+}, open(sys.argv[1], "w"))
+PY
+        CONFIG_FILE="$2"
+        ROUTES_FILE="$6"
+        migrate_existing_relay_config_if_needed >/dev/null
+
         ROUTES_FILE="$3"
         ROUTE_NAME="Spain"
         save_relay_route "$ROUTE_NAME"
@@ -99,15 +116,16 @@ run_config_generation_test() {
         ROUTE_NAME="Germany"
         save_relay_route "$ROUTE_NAME"
         create_relay_multi_config "$4"
-    ' "$sourceable" "$tmp_exit" "$tmp_relay" "$tmp_routes" "$tmp_multi"
+    ' "$sourceable" "$tmp_exit" "$tmp_relay" "$tmp_routes" "$tmp_multi" "$tmp_info" "$tmp_migrate_routes"
 
-    python3 - "$tmp_exit" "$tmp_relay" "$tmp_multi" <<'PYEOF'
+    python3 - "$tmp_exit" "$tmp_relay" "$tmp_multi" "$tmp_migrate_routes" <<'PYEOF'
 import json
 import sys
 
 exit_config = json.load(open(sys.argv[1]))
 relay_config = json.load(open(sys.argv[2]))
 multi_config = json.load(open(sys.argv[3]))
+migrated_routes = json.load(open(sys.argv[4]))["routes"]
 
 assert exit_config["inbounds"][0]["protocol"] == "vless"
 assert exit_config["inbounds"][0]["streamSettings"]["security"] == "reality"
@@ -125,6 +143,9 @@ assert {i["port"] for i in multi_config["inbounds"]} == {443, 8443}
 assert {o["tag"] for o in multi_config["outbounds"][:2]} == {"to-exit-443", "to-exit-8443"}
 assert multi_config["routing"]["rules"][-2]["outboundTag"] == "to-exit-443"
 assert multi_config["routing"]["rules"][-1]["outboundTag"] == "to-exit-8443"
+assert len(migrated_routes) == 1
+assert migrated_routes[0]["relay_port"] == "443"
+assert migrated_routes[0]["client_public_key"] == "relay_public_key_for_shape_test"
 PYEOF
 
     pass "config generation"
