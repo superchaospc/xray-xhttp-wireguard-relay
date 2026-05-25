@@ -2159,29 +2159,31 @@ main_menu() {
         echo "3) Step 2：在 Relay 中转 VPS 添加线路"
         echo "4) 查看线路状态"
         echo "5) 流量统计"
-        echo "6) 显示线路二维码"
-        echo "7) 刷新/显示订阅"
-        echo "8) Relay 多线路管理（改名/改端口/删除）"
-        echo "9) 一键排错诊断"
-        echo "10) 更新 Xray"
-        echo "11) 重启 Xray"
-        echo "12) 卸载"
+        echo "6) 查看所有线路和 VLESS 链接"
+        echo "7) 显示线路二维码"
+        echo "8) 刷新/显示订阅"
+        echo "9) Relay 多线路管理（改名/改端口/删除）"
+        echo "10) 一键排错诊断"
+        echo "11) 更新 Xray"
+        echo "12) 重启 Xray"
+        echo "13) 卸载"
         echo "0) 退出"
         echo ""
-        prompt_read choice -rp "请选择 [0-12]: " || exit 0
+        prompt_read choice -rp "请选择 [0-13]: " || exit 0
         case "$choice" in
             1) guided_install; break ;;
             2) install_exit; break ;;
             3) install_relay; break ;;
             4) show_route_status; read -r -p "按回车返回菜单..." _ ;;
             5) show_traffic_stats; read -r -p "按回车返回菜单..." _ ;;
-            6) show_route_qrcode; read -r -p "按回车返回菜单..." _ ;;
-            7) show_subscription; read -r -p "按回车返回菜单..." _ ;;
-            8) relay_manager; break ;;
-            9) diagnose_system; read -r -p "按回车返回菜单..." _ ;;
-            10) update_xray; read -r -p "按回车返回菜单..." _ ;;
-            11) restart_xray; read -r -p "按回车返回菜单..." _ ;;
-            12) uninstall_all; break ;;
+            6) list_relay_routes; read -r -p "按回车返回菜单..." _ ;;
+            7) show_route_qrcode; read -r -p "按回车返回菜单..." _ ;;
+            8) show_subscription; read -r -p "按回车返回菜单..." _ ;;
+            9) relay_manager; break ;;
+            10) diagnose_system; read -r -p "按回车返回菜单..." _ ;;
+            11) update_xray; read -r -p "按回车返回菜单..." _ ;;
+            12) restart_xray; read -r -p "按回车返回菜单..." _ ;;
+            13) uninstall_all; break ;;
             0) exit 0 ;;
             *) echo -e "${RED}无效选择${NC}" ;;
         esac

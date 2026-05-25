@@ -154,6 +154,7 @@ REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='..
 - 添加/更新落地线路
 - 查看线路状态：Xray 服务、本地监听端口、到 Exit 的 TCP 连通性
 - 流量统计：按线路显示 Xray 启动以来的上下行流量
+- 查看所有线路和 VLESS 链接：不用记命令，直接在菜单里显示已建线路的 `vless://` 链接
 - 显示线路二维码：选择单条或全部线路，直接在终端扫码导入
 - 刷新/显示订阅：生成 `/root/xray_vps2vps_subscription.txt` 和 `data:text/plain;base64,...` 订阅链接
 - 修改线路入口端口：保留线路参数，只更换 Relay 对客户端监听的端口
@@ -164,69 +165,26 @@ REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='..
 - 更新 Xray
 - 重启 Xray
 
-## 常用管理命令
+## 菜单操作
 
-查看所有线路和客户端链接：
-
-```bash
-/root/xray_vps2vps_deploy.sh --list
-```
-
-查看线路状态：
+所有常用操作都可以在菜单里完成。登录 **Relay 中转 VPS** 后只需要运行一次：
 
 ```bash
-/root/xray_vps2vps_deploy.sh --status
+/root/xray_vps2vps_deploy.sh
 ```
 
-查看流量统计：
+然后按菜单编号选择：
 
-```bash
-/root/xray_vps2vps_deploy.sh --stats
-```
+- `6) 查看所有线路和 VLESS 链接`：显示已建线路和 `vless://` 客户端链接
+- `7) 显示线路二维码`：选择单条线路或全部线路，直接扫码导入
+- `8) 刷新/显示订阅`：生成订阅文件并显示订阅 Data URL
+- `9) Relay 多线路管理`：进入改名、改端口、删除线路等管理入口
+- `10) 一键排错诊断`：检查服务、配置、端口、防火墙、BBR、Exit 连通性和最近日志
+- `11) 更新 Xray`：更新 Xray 并重启
+- `12) 重启 Xray`
+- `13) 卸载`
 
-显示二维码：
-
-```bash
-/root/xray_vps2vps_deploy.sh --qr
-```
-
-刷新并显示订阅：
-
-```bash
-/root/xray_vps2vps_deploy.sh --sub
-```
-
-修改线路入口端口：
-
-```bash
-/root/xray_vps2vps_deploy.sh --port
-```
-
-修改线路名称：
-
-```bash
-/root/xray_vps2vps_deploy.sh --rename
-```
-
-删除某条线路：
-
-```bash
-/root/xray_vps2vps_deploy.sh --delete
-```
-
-删除时只移除指定 Relay 入口端口对应的线路，其余线路不受影响。
-
-一键排错诊断：
-
-```bash
-/root/xray_vps2vps_deploy.sh --doctor
-```
-
-更新 Xray：
-
-```bash
-/root/xray_vps2vps_deploy.sh --update
-```
+删除线路时只移除指定 Relay 入口端口对应的线路，其余线路不受影响。
 
 ## 失败回滚
 
@@ -241,9 +199,11 @@ scp xray_vps2vps_deploy.sh root@EXIT_VPS_IP:/root/
 scp xray_vps2vps_deploy.sh root@RELAY_VPS_IP:/root/
 ```
 
-## 命令行方式
+## 可选命令行方式
 
-如果你不想走菜单，也可以直接指定角色：
+日常使用推荐走菜单；下面的命令行参数只适合自动化、复制一键命令或批量部署时使用。
+
+直接指定安装 Exit：
 
 ```bash
 /root/xray_vps2vps_deploy.sh --exit
@@ -253,26 +213,6 @@ Relay 支持读取 Exit 输出的参数包：
 
 ```bash
 REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='PASTE_EXIT_BUNDLE_HERE' RELAY_PORT='443' AUTO_YES=1 /root/xray_vps2vps_deploy.sh --relay
-```
-
-查看状态：
-
-```bash
-/root/xray_vps2vps_deploy.sh --status
-```
-
-查看 / 统计 / 二维码 / 订阅 / 改端口 / 改名 / 删除 Relay 线路：
-
-```bash
-/root/xray_vps2vps_deploy.sh --list
-/root/xray_vps2vps_deploy.sh --stats
-/root/xray_vps2vps_deploy.sh --qr
-/root/xray_vps2vps_deploy.sh --sub
-/root/xray_vps2vps_deploy.sh --port
-/root/xray_vps2vps_deploy.sh --rename
-/root/xray_vps2vps_deploy.sh --delete
-/root/xray_vps2vps_deploy.sh --doctor
-/root/xray_vps2vps_deploy.sh --restart
 ```
 
 ## 可选环境变量
