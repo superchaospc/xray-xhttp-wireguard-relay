@@ -306,7 +306,31 @@ REALITY_SITE=custom REALITY_SERVER_NAME=www.example.com REALITY_DEST=www.example
 bash test_xray_vps2vps_deploy.sh
 ```
 
-测试内容包括 Bash 语法、可选的 `shellcheck` 静态检查、Exit/Relay 两种配置生成后的 JSON 结构校验，以及一键参数包解析校验。这个测试不会安装 Xray，也不会改系统配置。
+当前测试状态：
+
+| 项目 | 结果 |
+| --- | --- |
+| Bash 语法检查（部署脚本 + 测试脚本） | 通过 |
+| 项目自带测试套件 `test_xray_vps2vps_deploy.sh` | 7 项全部通过，退出码 0 |
+| `shellcheck -S warning`（脚本作者标准） | 0 警告 |
+| `shellcheck -S style`（额外严格检查） | 仅 2 条风格/误报提示，均不影响功能 |
+
+自带测试套件覆盖：
+
+- Bash 语法检查
+- `shellcheck` 静态检查
+- Exit / Relay / 多线路 Relay 配置生成
+- 旧版单线路配置迁移
+- Exit bundle 编解码
+- 订阅文件生成、base64 编码和 URL 编码
+- `xray x25519` 密钥输出解析
+
+`shellcheck -S style` 的两条提示说明：
+
+- `SC2153`：`RELAY_PORT` 和 `relay_port` 是 Bash 环境变量与 JSON/Python 字段名同时存在导致的误报，不是拼写错误。
+- `SC2001`：`echo | sed 's/^/ /'` 可改成参数展开，属于纯风格建议，不影响功能。
+
+这些测试不会安装 Xray，也不会改系统配置。部署脚本本体面向 Linux + systemd + root 环境；真实端到端部署仍建议在 Linux VPS 上验证。
 
 ## 注意
 
