@@ -27,12 +27,16 @@ CONFIG_FILE="/usr/local/etc/xray/config.json"
 INFO_FILE="/root/xray_vps2vps_info.json"
 ROUTES_FILE="/root/xray_vps2vps_routes.json"
 SUBSCRIPTION_FILE="/root/xray_vps2vps_subscription.txt"
+TRAFFIC_SAMPLES_FILE="/root/xray_vps2vps_traffic_samples.jsonl"
 SYSCTL_FILE="/etc/sysctl.d/99-xray-vps2vps.conf"
 IP_CACHE_FILE="/root/.xray_vps2vps_ip"
 SCRIPT_PATH="/root/xray_vps2vps_deploy.sh"
 SCRIPT_URL="https://raw.githubusercontent.com/superchaospc/xray-vps2vps-relay/main/xray_vps2vps_deploy.sh"
+TRAFFIC_SAMPLER_SERVICE="/etc/systemd/system/xray-vps2vps-traffic-sampler.service"
+TRAFFIC_SAMPLER_TIMER="/etc/systemd/system/xray-vps2vps-traffic-sampler.timer"
 BACKUP_KEEP="${BACKUP_KEEP:-5}"
 IP_CACHE_TTL="${IP_CACHE_TTL:-3600}"
+TRAFFIC_SAMPLE_RETENTION_DAYS="${TRAFFIC_SAMPLE_RETENTION_DAYS:-400}"
 
 CLIENT_FP="${CLIENT_FP:-chrome}"
 REALITY_SITE="${REALITY_SITE:-microsoft}"
@@ -150,6 +154,7 @@ Xray VPS -> VPS 中转部署工具
   ./xray_vps2vps_deploy.sh --rename     修改线路名称
   ./xray_vps2vps_deploy.sh --port       修改线路入口端口
   ./xray_vps2vps_deploy.sh --doctor     一键排错诊断
+  ./xray_vps2vps_deploy.sh --sample-stats 采集一次流量快照（给 systemd timer 使用）
   ./xray_vps2vps_deploy.sh --update     更新 Xray
   ./xray_vps2vps_deploy.sh --restart    重启 Xray
   ./xray_vps2vps_deploy.sh --status     查看状态
@@ -1425,35 +1430,40 @@ def fmt(n):
         value /= 1024
 '
 
-show_traffic_stats() {
-    echo -e "${GREEN}[流量统计]${NC}"
+sample_traffic_stats() {
+    local quiet="${1:-0}"
     if [ ! -f "$ROUTES_FILE" ]; then
-        warn "未找到 Relay 线路表：$ROUTES_FILE"
+        [ "$quiet" = "1" ] || warn "未找到 Relay 线路表：$ROUTES_FILE"
+        return 0
+    fi
+    if ! command -v systemctl >/dev/null 2>&1; then
+        [ "$quiet" = "1" ] || warn "未找到 systemctl，无法读取实时统计"
         return 0
     fi
     if ! systemctl is-active --quiet xray; then
-        warn "Xray 未运行，无法读取实时统计"
+        [ "$quiet" = "1" ] || warn "Xray 未运行，无法读取实时统计"
         return 0
     fi
     if ! command -v xray >/dev/null 2>&1; then
-        warn "未找到 xray 命令"
+        [ "$quiet" = "1" ] || warn "未找到 xray 命令"
         return 0
     fi
 
     local stats_output
     if ! stats_output=$(xray api statsquery --server=127.0.0.1:10085 -pattern ">>>traffic>>>" 2>/dev/null); then
-        warn "无法读取 Xray Stats API。请确认当前配置由新版脚本生成，并重启 Xray。"
+        [ "$quiet" = "1" ] || warn "无法读取 Xray Stats API。请确认当前配置由新版脚本生成，并重启 Xray。"
         return 0
     fi
 
-    ROUTES_FILE="$ROUTES_FILE" STATS_RAW="$stats_output" python3 - <<PYEOF
+    mkdir -p "$(dirname "$TRAFFIC_SAMPLES_FILE")"
+    TRAFFIC_SAMPLES_FILE="$TRAFFIC_SAMPLES_FILE" \
+    TRAFFIC_SAMPLE_RETENTION_DAYS="$TRAFFIC_SAMPLE_RETENTION_DAYS" \
+    STATS_RAW="$stats_output" python3 - <<'PYEOF'
 import json
 import os
 import re
+import time
 
-${format_bytes_py}
-
-routes = json.load(open(os.environ["ROUTES_FILE"])).get("routes", [])
 try:
     payload = json.loads(os.environ["STATS_RAW"])
 except Exception:
@@ -1466,30 +1476,191 @@ for item in payload.get("stat", []) or payload.get("stats", []):
     stats[name] = value
 if not stats:
     raw = os.environ["STATS_RAW"]
-    for name, value in re.findall(r'name:\\s*"([^"]+)"\\s*value:\\s*(\\d+)', raw, re.S):
+    for name, value in re.findall(r'name:\s*"([^"]+)"\s*value:\s*(\d+)', raw, re.S):
         stats[name] = int(value)
 
-def get(name):
-    return stats.get(name, 0)
+sample_path = os.environ["TRAFFIC_SAMPLES_FILE"]
+now = int(time.time())
+fd = os.open(sample_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+with os.fdopen(fd, "a") as f:
+    f.write(json.dumps({"ts": now, "stats": stats}, separators=(",", ":"), ensure_ascii=False) + "\n")
+
+try:
+    retention_days = int(os.environ.get("TRAFFIC_SAMPLE_RETENTION_DAYS", "400"))
+except Exception:
+    retention_days = 400
+cutoff = now - max(retention_days, 1) * 86400
+try:
+    kept = []
+    with open(sample_path) as f:
+        for line in f:
+            try:
+                item = json.loads(line)
+                if int(item.get("ts", 0)) >= cutoff:
+                    kept.append(item)
+            except Exception:
+                continue
+    tmp = sample_path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        for item in kept:
+            f.write(json.dumps(item, separators=(",", ":"), ensure_ascii=False) + "\n")
+    os.replace(tmp, sample_path)
+except Exception:
+    pass
+PYEOF
+}
+
+install_traffic_sampler() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        warn "未找到 systemctl，无法安装流量采样定时器"
+        return 0
+    fi
+    if [ ! -x "$SCRIPT_PATH" ]; then
+        warn "未找到可执行脚本 $SCRIPT_PATH，跳过流量采样定时器"
+        return 0
+    fi
+
+    cat >"$TRAFFIC_SAMPLER_SERVICE" <<EOF
+[Unit]
+Description=Xray VPS-to-VPS relay traffic sampler
+After=xray.service
+
+[Service]
+Type=oneshot
+ExecStart=${SCRIPT_PATH} --sample-stats
+EOF
+
+    cat >"$TRAFFIC_SAMPLER_TIMER" <<'EOF'
+[Unit]
+Description=Sample Xray VPS-to-VPS relay traffic every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now "$(basename "$TRAFFIC_SAMPLER_TIMER")" >/dev/null 2>&1 || {
+        warn "流量采样定时器启用失败，可手动执行：systemctl enable --now $(basename "$TRAFFIC_SAMPLER_TIMER")"
+        return 0
+    }
+    sample_traffic_stats 1 || true
+    ok "流量采样定时器已启用（每 5 分钟采集一次）"
+}
+
+show_traffic_stats() {
+    echo -e "${GREEN}[流量统计]${NC}"
+    sample_traffic_stats 1 || true
+    if [ ! -f "$ROUTES_FILE" ]; then
+        warn "未找到 Relay 线路表：$ROUTES_FILE"
+        return 0
+    fi
+    if [ ! -f "$TRAFFIC_SAMPLES_FILE" ]; then
+        warn "还没有历史流量快照。请确认 Relay 已安装新版脚本，或稍后再看。"
+        return 0
+    fi
+
+    ROUTES_FILE="$ROUTES_FILE" TRAFFIC_SAMPLES_FILE="$TRAFFIC_SAMPLES_FILE" python3 - <<PYEOF
+import datetime as dt
+import json
+import os
+import time
+
+${format_bytes_py}
+
+routes = json.load(open(os.environ["ROUTES_FILE"])).get("routes", [])
+samples = []
+with open(os.environ["TRAFFIC_SAMPLES_FILE"]) as f:
+    for line in f:
+        try:
+            item = json.loads(line)
+            ts = int(item.get("ts", 0))
+            stats = item.get("stats", {})
+            if ts > 0 and isinstance(stats, dict):
+                samples.append({"ts": ts, "stats": {str(k): int(v) for k, v in stats.items()}})
+        except Exception:
+            continue
+samples.sort(key=lambda item: item["ts"])
 
 if not routes:
     print("暂无 Relay 线路")
     raise SystemExit(0)
+if not samples:
+    print("暂无流量快照。请等待定时采样运行，或执行 --sample-stats 采集一次。")
+    raise SystemExit(0)
 
-print("线路流量统计（Xray 启动以来）:")
+now = int(time.time())
+month_start = dt.datetime.fromtimestamp(now).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+windows = [
+    ("过去1小时", now - 3600),
+    ("过去24小时", now - 86400),
+    ("过去10天", now - 10 * 86400),
+    ("当月", int(month_start.timestamp())),
+]
+latest = samples[-1]
+oldest_ts = samples[0]["ts"]
+
+def get_delta(metric, start_ts):
+    baseline = None
+    total = 0
+    for sample in samples:
+        value = int(sample["stats"].get(metric, 0))
+        if sample["ts"] <= start_ts:
+            baseline = value
+            continue
+        if baseline is None:
+            baseline = value
+            continue
+        if value >= baseline:
+            total += value - baseline
+        else:
+            total += value
+        baseline = value
+    return total
+
+def get_since_start(metric):
+    return int(latest["stats"].get(metric, 0))
+
+def stamp(ts):
+    return dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+if now - latest["ts"] > 20 * 60:
+    print(f"提示：最近一次快照是 {stamp(latest['ts'])}，数据可能不是最新。")
+for label, start_ts in windows:
+    if oldest_ts > start_ts:
+        print(f"提示：{label} 的历史快照不足，当前只能从 {stamp(oldest_ts)} 起估算。")
+
+print(f"采样文件: {os.environ['TRAFFIC_SAMPLES_FILE']}")
+print(f"最近快照: {stamp(latest['ts'])}")
+print("")
 for route in routes:
     port = str(route["relay_port"])
     inbound = f"client-in-{port}"
     outbound = f"to-exit-{port}"
-    in_up = get(f"inbound>>>{inbound}>>>traffic>>>uplink")
-    in_down = get(f"inbound>>>{inbound}>>>traffic>>>downlink")
-    out_up = get(f"outbound>>>{outbound}>>>traffic>>>uplink")
-    out_down = get(f"outbound>>>{outbound}>>>traffic>>>downlink")
+    metrics = {
+        "in_up": f"inbound>>>{inbound}>>>traffic>>>uplink",
+        "in_down": f"inbound>>>{inbound}>>>traffic>>>downlink",
+        "out_up": f"outbound>>>{outbound}>>>traffic>>>uplink",
+        "out_down": f"outbound>>>{outbound}>>>traffic>>>downlink",
+    }
     print(f"- {route['name']} ({port} -> {route['exit_host']}:{route['exit_port']})")
-    print(f"  客户端上行: {fmt(in_up)}")
-    print(f"  客户端下行: {fmt(in_down)}")
-    print(f"  Relay 出站上行: {fmt(out_up)}")
-    print(f"  Relay 出站下行: {fmt(out_down)}")
+    for label, start_ts in windows:
+        in_up = get_delta(metrics["in_up"], start_ts)
+        in_down = get_delta(metrics["in_down"], start_ts)
+        out_up = get_delta(metrics["out_up"], start_ts)
+        out_down = get_delta(metrics["out_down"], start_ts)
+        print(f"  {label}: 客户端 ↑ {fmt(in_up)} / ↓ {fmt(in_down)}；Relay 出站 ↑ {fmt(out_up)} / ↓ {fmt(out_down)}")
+    print(
+        "  Xray 启动以来: "
+        f"客户端 ↑ {fmt(get_since_start(metrics['in_up']))} / ↓ {fmt(get_since_start(metrics['in_down']))}；"
+        f"Relay 出站 ↑ {fmt(get_since_start(metrics['out_up']))} / ↓ {fmt(get_since_start(metrics['out_down']))}"
+    )
 PYEOF
 }
 
@@ -2062,6 +2233,7 @@ install_relay() {
         rollback_config_and_routes "$routes_backup"
         die "Xray 重启失败，已回滚配置和线路表"
     fi
+    install_traffic_sampler
 
     relay_ip=$(get_public_ip)
     write_info "relay" \
@@ -2137,6 +2309,11 @@ uninstall_all() {
     warn "这会卸载 Xray 并删除 $CONFIG_FILE / $INFO_FILE / $ROUTES_FILE"
     read -r -p "确认卸载？(yes/no): " answer
     [ "$answer" = "yes" ] || { echo "已取消"; return; }
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now "$(basename "$TRAFFIC_SAMPLER_TIMER")" >/dev/null 2>&1 || true
+        rm -f "$TRAFFIC_SAMPLER_SERVICE" "$TRAFFIC_SAMPLER_TIMER"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
     if command -v xray >/dev/null 2>&1; then
         local url tmp
         url="https://raw.githubusercontent.com/XTLS/Xray-install/${XRAY_INSTALL_REF}/install-release.sh"
@@ -2145,7 +2322,7 @@ uninstall_all() {
         trap "rm -f '$tmp'" RETURN
         curl -fsSL --max-time 30 "$url" -o "$tmp" && bash "$tmp" remove || true
     fi
-    rm -f "$CONFIG_FILE" "$INFO_FILE" "$ROUTES_FILE" "$SUBSCRIPTION_FILE" "$IP_CACHE_FILE"
+    rm -f "$CONFIG_FILE" "$INFO_FILE" "$ROUTES_FILE" "$SUBSCRIPTION_FILE" "$TRAFFIC_SAMPLES_FILE" "$IP_CACHE_FILE"
     ok "卸载流程已完成"
 }
 
@@ -2206,6 +2383,7 @@ case "${1:-}" in
     --rename) rename_relay_route ;;
     --port) change_relay_port ;;
     --doctor) diagnose_system ;;
+    --sample-stats) sample_traffic_stats ;;
     --update) update_xray ;;
     --guided|"") main_menu ;;
     --status) show_route_status ;;

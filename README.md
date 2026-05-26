@@ -153,7 +153,7 @@ REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='..
 
 - 添加/更新落地线路
 - 查看线路状态：Xray 服务、本地监听端口、到 Exit 的 TCP 连通性
-- 流量统计：按线路显示 Xray 启动以来的上下行流量
+- 流量统计：按线路显示过去 1 小时、过去 24 小时、过去 10 天、当月，以及 Xray 启动以来的上下行流量
 - 查看所有线路和 VLESS 链接：不用记命令，直接在菜单里显示已建线路的 `vless://` 链接
 - 显示线路二维码：选择单条或全部线路，直接在终端扫码导入
 - 刷新/显示订阅：生成 `/root/xray_vps2vps_subscription.txt` 和 `data:text/plain;base64,...` 订阅链接
@@ -185,6 +185,28 @@ REALITY_SITE='microsoft' REALITY_SERVER_NAME='www.microsoft.com' EXIT_BUNDLE='..
 - `13) 卸载`
 
 删除线路时只移除指定 Relay 入口端口对应的线路，其余线路不受影响。
+
+### 流量统计说明
+
+Relay 安装完成后，脚本会创建 `xray-vps2vps-traffic-sampler.timer`，每 5 分钟采集一次 Xray Stats API 的累计计数，并保存到：
+
+```bash
+/root/xray_vps2vps_traffic_samples.jsonl
+```
+
+菜单里的“流量统计”会基于这些快照按线路估算：
+
+- 过去 1 小时
+- 过去 24 小时
+- 过去 10 天
+- 当月
+- Xray 启动以来
+
+如果刚安装或刚启用新版脚本，历史快照还不够完整，对应时间窗口会提示“历史快照不足”。也可以手动执行一次采样：
+
+```bash
+/root/xray_vps2vps_deploy.sh --sample-stats
+```
 
 ## 失败回滚
 
@@ -251,7 +273,7 @@ bash test_xray_vps2vps_deploy.sh
 | 项目 | 结果 |
 | --- | --- |
 | Bash 语法检查（部署脚本 + 测试脚本） | 通过 |
-| 项目自带测试套件 `test_xray_vps2vps_deploy.sh` | 7 项全部通过，退出码 0 |
+| 项目自带测试套件 `test_xray_vps2vps_deploy.sh` | 8 项全部通过，退出码 0 |
 | `shellcheck -S warning`（脚本作者标准） | 0 警告 |
 | `shellcheck -S style`（额外严格检查） | 仅 2 条风格/误报提示，均不影响功能 |
 
@@ -263,6 +285,7 @@ bash test_xray_vps2vps_deploy.sh
 - 旧版单线路配置迁移
 - Exit bundle 编解码
 - 订阅文件生成、base64 编码和 URL 编码
+- 历史流量快照和时间窗口统计
 - `xray x25519` 密钥输出解析
 
 `shellcheck -S style` 的两条提示说明：

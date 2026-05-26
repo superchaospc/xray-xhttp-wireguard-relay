@@ -234,6 +234,67 @@ PY
     pass "subscription and prompt"
 }
 
+run_traffic_history_test() {
+    local sourceable tmp_routes tmp_samples output_file
+    sourceable="$(mktemp /tmp/vps2vps-source.XXXXXX)"
+    tmp_routes="$(mktemp /tmp/vps2vps-routes.XXXXXX)"
+    tmp_samples="$(mktemp /tmp/vps2vps-traffic.XXXXXX)"
+    output_file="$(mktemp /tmp/vps2vps-traffic-output.XXXXXX)"
+    # shellcheck disable=SC2064
+    trap "rm -f '$sourceable' '$tmp_routes' '$tmp_samples' '$output_file'" RETURN
+    make_sourceable_copy "$sourceable"
+
+    python3 - "$tmp_routes" "$tmp_samples" <<'PYEOF'
+import json
+import sys
+import time
+
+routes_path, samples_path = sys.argv[1], sys.argv[2]
+json.dump({
+    "routes": [{
+        "name": "Spain Node",
+        "relay_port": "443",
+        "exit_host": "203.0.113.10",
+        "exit_port": "443"
+    }]
+}, open(routes_path, "w"))
+
+now = int(time.time())
+def stats(in_up, in_down, out_up, out_down):
+    return {
+        "inbound>>>client-in-443>>>traffic>>>uplink": in_up,
+        "inbound>>>client-in-443>>>traffic>>>downlink": in_down,
+        "outbound>>>to-exit-443>>>traffic>>>uplink": out_up,
+        "outbound>>>to-exit-443>>>traffic>>>downlink": out_down,
+    }
+
+samples = [
+    {"ts": now - 4000, "stats": stats(1000, 2000, 3000, 4000)},
+    {"ts": now - 3600, "stats": stats(1100, 2200, 3300, 4400)},
+    {"ts": now - 1800, "stats": stats(2000, 4000, 6000, 8000)},
+    {"ts": now - 60, "stats": stats(2500, 5000, 7500, 10000)},
+]
+with open(samples_path, "w") as f:
+    for sample in samples:
+        f.write(json.dumps(sample) + "\n")
+PYEOF
+
+    bash -c '
+        source "$0"
+        ROUTES_FILE="$1"
+        TRAFFIC_SAMPLES_FILE="$2"
+        show_traffic_stats >"$3"
+        grep -q "过去1小时" "$3"
+        grep -q "过去24小时" "$3"
+        grep -q "过去10天" "$3"
+        grep -q "当月" "$3"
+        grep -q "Xray 启动以来" "$3"
+        grep -q "1.37 KB" "$3"
+    ' "$sourceable" "$tmp_routes" "$tmp_samples" "$output_file"
+
+    pass "traffic history"
+}
+
 run_x25519_parser_test() {
     local private_key public_key
     private_key=$(awk -F':[[:space:]]*' 'tolower($1) ~ /private/ {print $2; exit}' <<'EOF'
@@ -260,6 +321,7 @@ main() {
     run_config_generation_test
     run_exit_bundle_test
     run_subscription_and_prompt_test
+    run_traffic_history_test
     run_x25519_parser_test
     pass "all tests passed"
 }
