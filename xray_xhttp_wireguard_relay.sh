@@ -288,7 +288,9 @@ open(sys.argv[2],"w").write(json.dumps(cfg,indent=2)+"\n")
 PY
 }
 install_xray_config(){
-  local tmp backup service_user service_group; tmp=$(mktemp); backup="$CONFIG_FILE.bak.$(date +%s)"
+  local tmp_base tmp backup service_user service_group
+  tmp_base=$(mktemp); tmp="$tmp_base.json"; mv "$tmp_base" "$tmp"
+  backup="$CONFIG_FILE.bak.$(date +%s)"
   if ! create_xray_config "$tmp"; then rm -f "$tmp"; return 1; fi
   if ! xray run -test -config "$tmp" >/dev/null; then rm -f "$tmp"; return 1; fi
   mkdir -p "$(dirname "$CONFIG_FILE")"
