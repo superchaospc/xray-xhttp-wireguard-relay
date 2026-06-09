@@ -35,6 +35,9 @@
 端口、XHTTP 路径、REALITY 凭据、WireGuard 接口、UDP 端口、密钥和
 `/30` 子网。修改客户端端口不会改变 WireGuard 身份。
 
+脚本使用独立的 `xray-xhttp-wireguard-relay.service`、配置目录和 Stats
+API 端口，不替换系统已有的 `xray.service` 或其配置，适合与现有节点并存。
+
 > **秘密参数包警告：** Exit 输出的 `WG_BUNDLE` 包含 Relay WireGuard
 > 私钥。只通过可信的加密渠道传输，不要发到聊天群、工单或公开日志。
 > 参数包内的 SHA-256 仅检测意外损坏，不提供加密、签名或身份认证。
@@ -166,11 +169,11 @@ WG_MTU=1280 bash /root/xray_xhttp_wireguard_relay.sh --relay
 ## 排错
 
 ```bash
-xray run -test -config /usr/local/etc/xray/config.json
+xray run -test -config /usr/local/etc/xray-xhttp-wireguard-relay/config.json
 wg show
 ip rule show
 ip route show table all
-systemctl status xray
+systemctl status xray-xhttp-wireguard-relay
 systemctl status wg-quick@xwg-ROUTEID
 ```
 

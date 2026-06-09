@@ -5,11 +5,13 @@ umask 077
 PROJECT_ID="xray-xhttp-wireguard-relay"
 SCRIPT_PATH="/root/xray_xhttp_wireguard_relay.sh"
 SCRIPT_URL="https://raw.githubusercontent.com/superchaospc/xray-xhttp-wireguard-relay/main/xray_xhttp_wireguard_relay.sh"
-CONFIG_FILE="${CONFIG_FILE:-/usr/local/etc/xray/config.json}"
+SERVICE_NAME="${SERVICE_NAME:-xray-xhttp-wireguard-relay}"
+CONFIG_FILE="${CONFIG_FILE:-/usr/local/etc/xray-xhttp-wireguard-relay/config.json}"
+SERVICE_FILE="${SERVICE_FILE:-/etc/systemd/system/$SERVICE_NAME.service}"
+API_PORT="${API_PORT:-11085}"
 ROUTES_FILE="${ROUTES_FILE:-/root/xray_xhttp_wireguard_routes.json}"
 EXIT_ROUTES_FILE="${EXIT_ROUTES_FILE:-/root/xray_xhttp_wireguard_exit_routes.json}"
 SUBSCRIPTION_FILE="${SUBSCRIPTION_FILE:-/root/xray_xhttp_wireguard_subscription.txt}"
-ORIGINAL_CONFIG_BACKUP="${ORIGINAL_CONFIG_BACKUP:-/root/.xray_xhttp_wireguard_original_config.json}"
 WG_DIR="${WG_DIR:-/etc/wireguard}"
 WG_SUBNET_POOL="${WG_SUBNET_POOL:-10.77.0.0/16}"
 WG_PORT_START="${WG_PORT_START:-51821}"
@@ -87,6 +89,28 @@ install_xray(){
   command -v xray >/dev/null && return
   local f; f=$(mktemp); curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o "$f"
   bash "$f" install; rm -f "$f"
+}
+ensure_service(){
+  local service_group; service_group=$(id -gn nobody 2>/dev/null || printf nobody)
+  cat >"$SERVICE_FILE" <<EOF
+[Unit]
+Description=Xray XHTTP WireGuard Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=nobody
+Group=$service_group
+ExecStart=/usr/local/bin/xray run -config $CONFIG_FILE
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable "$SERVICE_NAME" >/dev/null
 }
 generate_reality(){
   local out; out=$(xray x25519)
@@ -251,7 +275,7 @@ PY
 }
 
 create_xray_config(){
-  python3 - "$ROUTES_FILE" "$1" "$REALITY_DEST" <<'PY'
+  python3 - "$ROUTES_FILE" "$1" "$REALITY_DEST" "$API_PORT" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1])); dest=sys.argv[3]
 ins=[]; outs=[{"tag":"direct","protocol":"freedom"},{"tag":"blocked","protocol":"blackhole"},{"tag":"api","protocol":"freedom"}]; rules=[{"type":"field","protocol":["bittorrent"],"outboundTag":"blocked"},{"type":"field","inboundTag":["api"],"outboundTag":"api"}]
@@ -259,7 +283,7 @@ for r in d["routes"]:
  rid=r["route_id"]; tag="client-in-"+rid
  ins.append({"tag":tag,"port":r["relay_port"],"protocol":"vless","settings":{"clients":[{"id":r["uuid"],"flow":""}],"decryption":"none"},"streamSettings":{"network":"xhttp","security":"reality","xhttpSettings":{"path":r["xhttp_path"],"mode":r["xhttp_mode"]},"realitySettings":{"show":False,"dest":dest,"xver":0,"serverNames":[r["sni"]],"privateKey":r["reality_private"],"shortIds":[r["short_id"]]}},"sniffing":{"enabled":True,"destOverride":["http","tls","quic"]}})
  out="wg-out-"+rid; outs.append({"tag":out,"protocol":"freedom","sendThrough":r["relay_address"].split("/")[0]}); rules.append({"type":"field","inboundTag":[tag],"outboundTag":out})
-cfg={"log":{"loglevel":"warning"},"api":{"tag":"api","services":["StatsService"]},"stats":{},"policy":{"system":{"statsInboundUplink":True,"statsInboundDownlink":True}},"inbounds":ins+[{"tag":"api","listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}],"outbounds":outs,"routing":{"domainStrategy":"AsIs","rules":rules}}
+cfg={"log":{"loglevel":"warning"},"api":{"tag":"api","services":["StatsService"]},"stats":{},"policy":{"system":{"statsInboundUplink":True,"statsInboundDownlink":True}},"inbounds":ins+[{"tag":"api","listen":"127.0.0.1","port":int(sys.argv[4]),"protocol":"dokodemo-door","settings":{"address":"127.0.0.1"}}],"outbounds":outs,"routing":{"domainStrategy":"AsIs","rules":rules}}
 open(sys.argv[2],"w").write(json.dumps(cfg,indent=2)+"\n")
 PY
 }
@@ -268,15 +292,13 @@ install_xray_config(){
   if ! create_xray_config "$tmp"; then rm -f "$tmp"; return 1; fi
   if ! xray run -test -config "$tmp" >/dev/null; then rm -f "$tmp"; return 1; fi
   mkdir -p "$(dirname "$CONFIG_FILE")"
-  if [ -f "$CONFIG_FILE" ]; then
-    cp -a "$CONFIG_FILE" "$backup"
-    [ -e "$ORIGINAL_CONFIG_BACKUP" ] || { cp -a "$CONFIG_FILE" "$ORIGINAL_CONFIG_BACKUP"; chmod 600 "$ORIGINAL_CONFIG_BACKUP"; }
-  fi
-  service_user=$(systemctl show xray -p User --value 2>/dev/null || true); service_user="${service_user:-root}"
+  [ ! -f "$CONFIG_FILE" ] || cp -a "$CONFIG_FILE" "$backup"
+  ensure_service
+  service_user=$(systemctl show "$SERVICE_NAME" -p User --value 2>/dev/null || true); service_user="${service_user:-nobody}"
   service_group=$(id -gn "$service_user" 2>/dev/null || printf root)
   if ! install -m 640 "$tmp" "$CONFIG_FILE" || ! chown "root:$service_group" "$CONFIG_FILE"; then rm -f "$tmp"; return 1; fi
   rm -f "$tmp"
-  if ! systemctl restart xray; then [ ! -f "$backup" ] || mv "$backup" "$CONFIG_FILE"; systemctl restart xray || true; return 1; fi
+  if ! systemctl restart "$SERVICE_NAME"; then [ ! -f "$backup" ] || mv "$backup" "$CONFIG_FILE"; systemctl restart "$SERVICE_NAME" || true; return 1; fi
 }
 client_links(){
   local host; host=$(public_ip); [[ "$host" == *:* ]] && host="[$host]"
@@ -323,7 +345,7 @@ show_qr(){
   while IFS=$'\t' read -r _ name link; do printf '\n%s\n' "$name"; qrencode -t ANSIUTF8 "$link"; done < <(client_links)
 }
 show_stats(){
-  if ! xray api statsquery --server=127.0.0.1:10085 -pattern 'inbound>>>' 2>/dev/null; then
+  if ! xray api statsquery --server="127.0.0.1:$API_PORT" -pattern 'inbound>>>' 2>/dev/null; then
     warn "无法读取 Xray Stats API，请确认 Xray 正常运行"
     return 1
   fi
@@ -368,7 +390,7 @@ PY
   rm -f "$backup"; firewall_del_exit "$rid"; systemctl disable --now "wg-quick@$iface" 2>/dev/null || true; rm -f "$WG_DIR/$iface.conf"; refresh_subscription
 }
 status(){
-  systemctl --no-pager status xray 2>/dev/null | sed -n '1,5p' || true
+  systemctl --no-pager status "$SERVICE_NAME" 2>/dev/null | sed -n '1,5p' || true
   json_init "$ROUTES_FILE"; python3 - "$ROUTES_FILE" <<'PY'
 import json
 for r in json.load(open(__import__("sys").argv[1]))["routes"]: print(r["route_id"],r["name"],r["interface"],r["exit_endpoint"],r["wg_port"])
@@ -384,7 +406,7 @@ doctor(){
   wg show all transfer 2>/dev/null || true
   status
 }
-restart_all(){ systemctl restart xray; json_init "$ROUTES_FILE"; python3 - "$ROUTES_FILE" <<'PY' | xargs -r -n1 systemctl restart
+restart_all(){ systemctl restart "$SERVICE_NAME"; json_init "$ROUTES_FILE"; python3 - "$ROUTES_FILE" <<'PY' | xargs -r -n1 systemctl restart
 import json,sys
 for r in json.load(open(sys.argv[1]))["routes"]: print("wg-quick@"+r["interface"])
 PY
@@ -398,11 +420,8 @@ for r in json.load(open(sys.argv[1]))["routes"]: print(r["route_id"],r["interfac
 PY
     systemctl disable --now "wg-quick@$iface" 2>/dev/null || true; rm -f "$WG_DIR/$iface.conf"; firewall_del_exit "$rid"
   done; done
-  if [ -f "$ORIGINAL_CONFIG_BACKUP" ]; then
-    cp -a "$ORIGINAL_CONFIG_BACKUP" "$CONFIG_FILE"; rm -f "$ORIGINAL_CONFIG_BACKUP"; systemctl restart xray || true
-  elif [ -f "$ROUTES_FILE" ]; then
-    rm -f "$CONFIG_FILE"; systemctl stop xray || true
-  fi
+  systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
+  rm -f "$SERVICE_FILE"; rm -rf "$(dirname "$CONFIG_FILE")"; systemctl daemon-reload
   rm -f "$ROUTES_FILE" "$EXIT_ROUTES_FILE" "$SUBSCRIPTION_FILE" "/etc/sysctl.d/99-$PROJECT_ID.conf"; ok "已删除本项目资源"
 }
 main_menu(){

@@ -6,6 +6,8 @@ assert_contains "$SCRIPT" 'network":"xhttp"'
 assert_contains "$SCRIPT" '"sendThrough":r["relay_address"]'
 assert_contains "$SCRIPT" '"protocol":["bittorrent"]'
 assert_contains "$SCRIPT" 'type":"xhttp"'
+assert_contains "$SCRIPT" 'SERVICE_NAME="${SERVICE_NAME:-xray-xhttp-wireguard-relay}"'
+assert_contains "$SCRIPT" 'API_PORT="${API_PORT:-11085}"'
 assert_contains README.md 'superchaospc/xray-xhttp-wireguard-relay'
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

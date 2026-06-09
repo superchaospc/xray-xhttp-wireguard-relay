@@ -10,7 +10,7 @@ assert_contains "$SCRIPT" '--qr) show_qr'
 assert_contains "$SCRIPT" '--stats) show_stats'
 assert_contains "$SCRIPT" 'main_menu'
 assert_contains "$SCRIPT" 'ensure_relay_resources_free'
-assert_contains "$SCRIPT" 'ORIGINAL_CONFIG_BACKUP'
+assert_contains "$SCRIPT" 'ensure_service'
 assert_contains "$SCRIPT" 'int(x["relay_port"])!=int(new)'
 assert_contains "$SCRIPT" 'if ! xray run -test'
 pass lifecycle
