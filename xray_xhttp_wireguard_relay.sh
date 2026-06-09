@@ -298,9 +298,15 @@ install_xray_config(){
   ensure_service
   service_user=$(systemctl show "$SERVICE_NAME" -p User --value 2>/dev/null || true); service_user="${service_user:-nobody}"
   service_group=$(id -gn "$service_user" 2>/dev/null || printf root)
+  chown "root:$service_group" "$(dirname "$CONFIG_FILE")"
+  chmod 750 "$(dirname "$CONFIG_FILE")"
   if ! install -m 640 "$tmp" "$CONFIG_FILE" || ! chown "root:$service_group" "$CONFIG_FILE"; then rm -f "$tmp"; return 1; fi
   rm -f "$tmp"
-  if ! systemctl restart "$SERVICE_NAME"; then [ ! -f "$backup" ] || mv "$backup" "$CONFIG_FILE"; systemctl restart "$SERVICE_NAME" || true; return 1; fi
+  if ! systemctl restart "$SERVICE_NAME" || ! sleep 1 || ! systemctl is-active --quiet "$SERVICE_NAME"; then
+    [ ! -f "$backup" ] || mv "$backup" "$CONFIG_FILE"
+    systemctl restart "$SERVICE_NAME" || true
+    return 1
+  fi
 }
 client_links(){
   local host; host=$(public_ip); [[ "$host" == *:* ]] && host="[$host]"

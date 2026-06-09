@@ -8,4 +8,6 @@ assert_contains "$SCRIPT" 'latest handshake'
 assert_contains "$SCRIPT" 'firewall_del_exit'
 assert_contains "$SCRIPT" 'PostUp = iptables'
 assert_contains "$SCRIPT" 'systemctl show "$SERVICE_NAME" -p User'
+assert_contains "$SCRIPT" 'systemctl is-active --quiet "$SERVICE_NAME"'
+assert_contains "$SCRIPT" 'chmod 750 "$(dirname "$CONFIG_FILE")"'
 pass firewall-diagnostics
