@@ -218,6 +218,20 @@ bash run_all_tests.sh
 - 增加秘密 route bundle、稳定接口名、源地址策略路由和带归属标记的 NAT。
 - 支持 IPv4/IPv6 WireGuard endpoint。
 
+## v1.0.1 实机验证
+
+已在 Ubuntu 24.04 双 VPS 完成真实部署：
+
+- 香港 Relay：VLESS XHTTP REALITY，IPv6 TCP 9443。
+- ZLIDC Exit：WireGuard UDP 51822，独立 `10.79.0.0/30`。
+- 本地 Xray 客户端通过生成的 VLESS URI 连接，公网出口确认是 Exit IPv4。
+- Cloudflare trace 返回 HTTP/2，Xray Stats API 记录双向流量。
+- 两端 WireGuard 与独立 Xray 服务重启后，握手和代理链路恢复。
+- 原有主 Xray、`wg-hz`、`wg-mly` 和 443/8443 监听均保持 active。
+
+本次实测同时修复：独立 Xray 服务隔离、JSON 临时配置识别、服务目录权限与
+启动确认、客户端入口地址持久化，以及 Relay WireGuard 固定监听端口。
+
 ## 来源与许可
 
 本项目派生自
