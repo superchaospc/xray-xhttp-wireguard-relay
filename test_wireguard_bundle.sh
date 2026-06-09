@@ -5,6 +5,7 @@ source "$(dirname "$0")/test_helpers.sh"; source_script
 [ "$(route_iface a1b2c3d4)" = xwg-a1b2c3d4 ] || fail iface
 [ "${#PROJECT_ID}" -gt 0 ] || fail identity
 [ "$(format_endpoint 2001:db8::1 51821)" = '[2001:db8::1]:51821' ] || fail ipv6
+assert_contains "$SCRIPT" 'ListenPort = $WG_PORT'
 valid_mode auto && ! valid_mode grpc || fail mode
 valid_path /12345678 && ! valid_path /short || fail path
 key=$(python3 - <<'PY'

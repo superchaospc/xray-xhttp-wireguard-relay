@@ -189,6 +189,7 @@ ensure_relay_resources_free(){
   ! ip link show "$iface" >/dev/null 2>&1 || die "WireGuard 接口已存在: $iface"
   ! ip rule show | grep -Eq "lookup ($table|$table\\b)" || die "策略路由表已被占用: $table"
   ! ip route show table all | grep -Fq "$WG_SUBNET" || die "隧道子网已被本机路由占用: $WG_SUBNET"
+  ! ss -lunH | awk '{print $5}' | grep -Eq "[:.]$WG_PORT$" || die "Relay WireGuard UDP 端口已被占用: $WG_PORT"
 }
 write_exit_wg(){
   mkdir -p "$WG_DIR"; local iface out mark; iface=$(route_iface "$ROUTE_ID"); out=$(egress_iface); mark="$PROJECT_ID:$ROUTE_ID"
@@ -217,6 +218,7 @@ write_relay_wg(){
   cat >"$WG_DIR/$iface.conf" <<EOF
 [Interface]
 Address = $RELAY_ADDRESS
+ListenPort = $WG_PORT
 PrivateKey = $RELAY_PRIVATE_KEY
 MTU = $WG_MTU
 Table = off
