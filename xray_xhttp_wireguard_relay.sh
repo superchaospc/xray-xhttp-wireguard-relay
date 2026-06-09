@@ -263,12 +263,12 @@ PY
 }
 save_relay_route(){
   local path="$1" iface table; iface=$(route_iface "$ROUTE_ID"); table=$(route_table "$ROUTE_ID")
-  python3 - "$ROUTES_FILE" "$path" "$ROUTE_ID" "$ROUTE_NAME" "$RELAY_PORT" "$CLIENT_UUID" "$REALITY_PRIVATE" "$REALITY_PUBLIC" "$SHORT_ID" "$REALITY_SERVER_NAME" "$CLIENT_FP" "$XHTTP_MODE" "$iface" "$table" "$WG_SUBNET" "$RELAY_ADDRESS" "$EXIT_ADDRESS" "$EXIT_ENDPOINT" "$WG_PORT" "$EXIT_PUBLIC_KEY" "$RELAY_PRIVATE_KEY" "$RELAY_PUBLIC_KEY" "$PRESHARED_KEY" <<'PY'
+  python3 - "$ROUTES_FILE" "$path" "$ROUTE_ID" "$ROUTE_NAME" "$RELAY_PORT" "$RELAY_PUBLIC_HOST" "$CLIENT_UUID" "$REALITY_PRIVATE" "$REALITY_PUBLIC" "$SHORT_ID" "$REALITY_SERVER_NAME" "$CLIENT_FP" "$XHTTP_MODE" "$iface" "$table" "$WG_SUBNET" "$RELAY_ADDRESS" "$EXIT_ADDRESS" "$EXIT_ENDPOINT" "$WG_PORT" "$EXIT_PUBLIC_KEY" "$RELAY_PRIVATE_KEY" "$RELAY_PUBLIC_KEY" "$PRESHARED_KEY" <<'PY'
 import json,sys
-(p,path,rid,name,port,uuid,rpriv,rpub,sid,sni,fp,mode,iface,table,subnet,raddr,eaddr,endpoint,wgport,epub,wpriv,wpub,psk)=sys.argv[1:]
+(p,path,rid,name,port,public_host,uuid,rpriv,rpub,sid,sni,fp,mode,iface,table,subnet,raddr,eaddr,endpoint,wgport,epub,wpriv,wpub,psk)=sys.argv[1:]
 d=json.load(open(p))
 assert all(r["route_id"]!=rid and int(r["relay_port"])!=int(port) and r["subnet"]!=subnet and int(r["table"])!=int(table) for r in d["routes"])
-d["routes"].append({"route_id":rid,"name":name,"relay_port":int(port),"uuid":uuid,"reality_private":rpriv,"reality_public":rpub,"short_id":sid,"sni":sni,"fp":fp,"xhttp_path":path,"xhttp_mode":mode,"interface":iface,"table":int(table),"subnet":subnet,"relay_address":raddr,"exit_address":eaddr,"exit_endpoint":endpoint,"wg_port":int(wgport),"exit_public_key":epub,"relay_private_key":wpriv,"relay_public_key":wpub,"preshared_key":psk})
+d["routes"].append({"route_id":rid,"name":name,"relay_port":int(port),"relay_host":public_host,"uuid":uuid,"reality_private":rpriv,"reality_public":rpub,"short_id":sid,"sni":sni,"fp":fp,"xhttp_path":path,"xhttp_mode":mode,"interface":iface,"table":int(table),"subnet":subnet,"relay_address":raddr,"exit_address":eaddr,"exit_endpoint":endpoint,"wg_port":int(wgport),"exit_public_key":epub,"relay_private_key":wpriv,"relay_public_key":wpub,"preshared_key":psk})
 open(p+".tmp","w").write(json.dumps(d,indent=2)+"\n")
 PY
   mv "$ROUTES_FILE.tmp" "$ROUTES_FILE"; chmod 600 "$ROUTES_FILE"
@@ -309,12 +309,13 @@ install_xray_config(){
   fi
 }
 client_links(){
-  local host; host=$(public_ip); [[ "$host" == *:* ]] && host="[$host]"
-  python3 - "$ROUTES_FILE" "$host" <<'PY'
+  local fallback; fallback=$(public_ip)
+  python3 - "$ROUTES_FILE" "$fallback" <<'PY'
 import json,sys,urllib.parse
 for r in json.load(open(sys.argv[1]))["routes"]:
+ host=r.get("relay_host",sys.argv[2]); host=f"[{host}]" if ":" in host else host
  q=urllib.parse.urlencode({"security":"reality","encryption":"none","pbk":r["reality_public"],"fp":r["fp"],"type":"xhttp","path":r["xhttp_path"],"mode":r["xhttp_mode"],"sni":r["sni"],"sid":r["short_id"]})
- print(f'{r["route_id"]}\t{r["name"]}\tvless://{r["uuid"]}@{sys.argv[2]}:{r["relay_port"]}?{q}#{urllib.parse.quote(r["name"])}')
+ print(f'{r["route_id"]}\t{r["name"]}\tvless://{r["uuid"]}@{host}:{r["relay_port"]}?{q}#{urllib.parse.quote(r["name"])}')
 PY
 }
 refresh_subscription(){ local tmp; tmp=$(mktemp); client_links | cut -f3- | base64 | tr -d '\n' >"$tmp"; printf '\n' >>"$tmp"; mv "$tmp" "$SUBSCRIPTION_FILE"; chmod 600 "$SUBSCRIPTION_FILE"; }
@@ -338,7 +339,10 @@ install_exit(){
 install_relay(){
   require_root; install_deps; install_xray; json_init "$ROUTES_FILE"; load_bundle
   RELAY_PORT="${RELAY_PORT:-443}"; valid_port "$RELAY_PORT" || die "无效 RELAY_PORT"
-  valid_mode "$XHTTP_MODE" || die "无效 XHTTP_MODE"; ROUTE_NAME="${ROUTE_NAME:-$EXIT_ENDPOINT}"; ensure_relay_resources_free
+  valid_mode "$XHTTP_MODE" || die "无效 XHTTP_MODE"
+  ROUTE_NAME="${ROUTE_NAME:-$EXIT_ENDPOINT}"
+  RELAY_PUBLIC_HOST="${RELAY_PUBLIC_HOST:-$(public_ip)}"
+  ensure_relay_resources_free
   CLIENT_UUID=$(xray uuid); generate_reality; SHORT_ID=$(random_hex 8); local path; path=$(random_path)
   local old; old=$(mktemp); cp "$ROUTES_FILE" "$old"; save_relay_route "$path"; write_relay_wg
   if ! systemctl enable --now "wg-quick@$(route_iface "$ROUTE_ID")" || ! install_xray_config; then
