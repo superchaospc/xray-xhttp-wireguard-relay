@@ -57,6 +57,8 @@ print_help(){ cat <<'EOF'
   --exit       在落地 VPS 新建 WireGuard 线路并输出秘密参数包
   --relay      在中转 VPS 导入 WG_BUNDLE 并建立 XHTTP REALITY 入口
   --list       查看线路和客户端链接
+  --qr         显示线路终端二维码
+  --stats      查看 Xray 当前线路流量
   --sub        刷新订阅
   --status     查看 Xray/WireGuard 状态
   --doctor     诊断监听、握手、策略路由与配置
@@ -184,6 +186,11 @@ firewall_add_exit(){
   sysctl -w net.ipv4.ip_forward=1 >/dev/null
   printf 'net.ipv4.ip_forward=1\n' >"/etc/sysctl.d/99-$PROJECT_ID.conf"
 }
+firewall_add_relay(){
+  local mark="$PROJECT_ID:$ROUTE_ID"
+  iptables -C INPUT -p tcp --dport "$RELAY_PORT" -m comment --comment "$mark" -j ACCEPT 2>/dev/null ||
+    iptables -A INPUT -p tcp --dport "$RELAY_PORT" -m comment --comment "$mark" -j ACCEPT
+}
 firewall_del_exit(){
   local mark="$PROJECT_ID:$1"
   while read -r line; do [ -n "$line" ] && eval "iptables $line" 2>/dev/null || true; done \
@@ -267,9 +274,20 @@ install_relay(){
   if ! systemctl enable --now "wg-quick@$(route_iface "$ROUTE_ID")" || ! install_xray_config; then
     systemctl disable --now "wg-quick@$(route_iface "$ROUTE_ID")" 2>/dev/null || true; rm -f "$WG_DIR/$(route_iface "$ROUTE_ID").conf"; mv "$old" "$ROUTES_FILE"; die "安装失败，已回滚"
   fi
+  firewall_add_relay
   rm -f "$old"; refresh_subscription; client_links | awk -F'\t' -v id="$ROUTE_ID" '$1==id{print $3}'; ok "线路 $ROUTE_NAME 已安装"
 }
 list_routes(){ json_init "$ROUTES_FILE"; client_links | awk -F'\t' '{print $1"  "$2"\n"$3"\n"}'; }
+show_qr(){
+  need qrencode
+  while IFS=$'\t' read -r _ name link; do printf '\n%s\n' "$name"; qrencode -t ANSIUTF8 "$link"; done < <(client_links)
+}
+show_stats(){
+  if ! xray api statsquery --server=127.0.0.1:10085 -pattern 'inbound>>>' 2>/dev/null; then
+    warn "无法读取 Xray Stats API，请确认 Xray 正常运行"
+    return 1
+  fi
+}
 mutate_route(){
   local op="$1"; json_init "$ROUTES_FILE"; python3 - "$ROUTES_FILE" "$op" "${RELAY_PORT:-}" "${NEW_RELAY_PORT:-}" "${ROUTE_NAME:-}" <<'PY'
 import json,sys
@@ -287,13 +305,21 @@ PY
   mv "$ROUTES_FILE.tmp" "$ROUTES_FILE"; chmod 600 "$ROUTES_FILE"
 }
 rename_route(){ [ -n "${RELAY_PORT:-}" ] && [ -n "${ROUTE_NAME:-}" ] || die "需要 RELAY_PORT 和 ROUTE_NAME"; mutate_route rename; refresh_subscription; }
-change_port(){ valid_port "${NEW_RELAY_PORT:-}" || die "需要有效 NEW_RELAY_PORT"; mutate_route port; install_xray_config; refresh_subscription; }
+change_port(){
+  valid_port "${NEW_RELAY_PORT:-}" || die "需要有效 NEW_RELAY_PORT"
+  local rid old="$RELAY_PORT"; rid=$(python3 - "$ROUTES_FILE" "$old" <<'PY'
+import json,sys
+print(next(r["route_id"] for r in json.load(open(sys.argv[1]))["routes"] if str(r["relay_port"])==sys.argv[2]))
+PY
+)
+  mutate_route port; install_xray_config; firewall_del_exit "$rid"; ROUTE_ID="$rid"; RELAY_PORT="$NEW_RELAY_PORT"; firewall_add_relay; refresh_subscription
+}
 delete_route(){
   local rid iface; rid=$(python3 - "$ROUTES_FILE" "${RELAY_PORT:-}" <<'PY'
 import json,sys
 print(next(r["route_id"] for r in json.load(open(sys.argv[1]))["routes"] if str(r["relay_port"])==sys.argv[2]))
 PY
-); iface=$(route_iface "$rid"); mutate_route delete; install_xray_config; systemctl disable --now "wg-quick@$iface" 2>/dev/null || true; rm -f "$WG_DIR/$iface.conf"; refresh_subscription
+); iface=$(route_iface "$rid"); mutate_route delete; install_xray_config; firewall_del_exit "$rid"; systemctl disable --now "wg-quick@$iface" 2>/dev/null || true; rm -f "$WG_DIR/$iface.conf"; refresh_subscription
 }
 status(){
   systemctl --no-pager status xray 2>/dev/null | sed -n '1,5p' || true
@@ -328,11 +354,26 @@ PY
   done; done
   rm -f "$ROUTES_FILE" "$EXIT_ROUTES_FILE" "$SUBSCRIPTION_FILE" "/etc/sysctl.d/99-$PROJECT_ID.conf"; ok "已删除本项目资源"
 }
+main_menu(){
+  while true; do
+    cat <<'EOF'
+1) Exit 新建线路  2) Relay 导入线路  3) 查看线路  4) 二维码
+5) 订阅  6) 流量  7) 状态  8) 诊断  9) 重启  10) 卸载  0) 退出
+EOF
+    read -r -p "请选择: " n
+    case "$n" in
+      1) install_exit;; 2) install_relay;; 3) list_routes;; 4) show_qr;; 5) refresh_subscription; cat "$SUBSCRIPTION_FILE";;
+      6) show_stats;; 7) status;; 8) doctor;; 9) restart_all;; 10) uninstall_all;; 0) break;; *) warn "无效选择";;
+    esac
+  done
+}
 
 main(){
   print_banner
-  case "${1:---help}" in
+  case "${1:-}" in
+    "") main_menu;;
     --exit) install_exit;; --relay) install_relay;; --list) list_routes;; --sub) refresh_subscription; cat "$SUBSCRIPTION_FILE";;
+    --qr) show_qr;; --stats) show_stats;;
     --status) status;; --doctor) doctor;; --rename) rename_route;; --port) change_port;; --delete) delete_route;;
     --restart) restart_all;; --update) update_xray;; --uninstall) uninstall_all;; --help|-h) print_help;; *) print_help; exit 1;;
   esac

@@ -106,6 +106,10 @@ bash /root/xray_xhttp_wireguard_relay.sh --list
 # 刷新并显示 base64 订阅
 bash /root/xray_xhttp_wireguard_relay.sh --sub
 
+# 终端二维码与当前流量
+bash /root/xray_xhttp_wireguard_relay.sh --qr
+bash /root/xray_xhttp_wireguard_relay.sh --stats
+
 # 状态与诊断
 bash /root/xray_xhttp_wireguard_relay.sh --status
 bash /root/xray_xhttp_wireguard_relay.sh --doctor
@@ -127,7 +131,7 @@ bash /root/xray_xhttp_wireguard_relay.sh --update
 bash /root/xray_xhttp_wireguard_relay.sh --uninstall
 ```
 
-线路状态以版本化 JSON 保存，敏感文件权限为 `600`。脚本使用稳定的
+直接运行脚本会进入交互菜单。线路状态以版本化 JSON 保存，敏感文件权限为 `600`。脚本使用稳定的
 `route_id` 生成不超过 15 字符的 WireGuard 接口名，例如
 `xwg-a1b2c3d4`。项目 firewall 规则带
 `xray-xhttp-wireguard-relay:<route_id>` 标记，删除时不会按模糊端口匹配
